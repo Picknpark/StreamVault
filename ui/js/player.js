@@ -11,6 +11,7 @@ import {
 } from "./utils.js";
 
 const SPEED_STEPS = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
+const SUB_EXTS = new Set(["srt", "ass", "ssa", "vtt", "sub"]);
 
 let switchViewFn = null;
 let hudIdleTimer = null;
@@ -18,6 +19,176 @@ let canvasClickTimer = null;
 let lastViewportSig = "";
 let lastTipSig = "";
 let nativeTipActive = false;
+
+function normalizeMediaUrlKey(raw) {
+  if (!raw) return "";
+  if (raw.startsWith("local://")) return raw;
+  try {
+    const u = new URL(raw);
+    u.hash = "";
+    return u.href.replace(/%[0-9a-f]{2}/gi, (m) => m.toUpperCase());
+  } catch (_) {
+    return String(raw).trim();
+  }
+}
+
+function safeDecodeUri(s) {
+  if (!s) return "";
+  try {
+    return decodeURIComponent(s);
+  } catch (_) {
+    return s;
+  }
+}
+
+function extractDecodedStemAndExt(raw) {
+  try {
+    const clean = String(raw || "").trim();
+    let lastSeg = "";
+    if (/^https?:\/\//i.test(clean)) {
+      const u = new URL(clean);
+      const parts = u.pathname.split("/").filter(Boolean);
+      lastSeg = parts.length ? safeDecodeUri(parts[parts.length - 1]) : "";
+    } else {
+      const parts = clean.split(/[\\/]/).filter(Boolean);
+      lastSeg = parts.length ? safeDecodeUri(parts[parts.length - 1]) : "";
+    }
+    const dot = lastSeg.lastIndexOf(".");
+    if (dot <= 0) return null;
+    return {
+      stem: lastSeg.slice(0, dot).trim().toLowerCase(),
+      ext: lastSeg.slice(dot + 1).trim().toLowerCase(),
+      filename: lastSeg,
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+function matchSubtitleItemsForMediaUrl(mediaUrl, subItems) {
+  const info = extractDecodedStemAndExt(mediaUrl);
+  if (!info || !info.stem) return [];
+  const exact = [];
+  const suffixed = [];
+  for (const sub of subItems) {
+    const sInfo = extractDecodedStemAndExt(sub.url || sub.filename || "");
+    if (!sInfo || !SUB_EXTS.has(sInfo.ext)) continue;
+    if (sInfo.stem === info.stem) {
+      exact.push(sub.url);
+    } else if (sInfo.stem.startsWith(info.stem)) {
+      const rest = sInfo.stem.slice(info.stem.length);
+      if (rest.startsWith(".") || rest.startsWith("_") || rest.startsWith("-")) {
+        suffixed.push(sub.url);
+      }
+    }
+  }
+  return [...exact, ...suffixed];
+}
+
+function findChapterAtTimeMs(chapters, timeMs) {
+  if (!Array.isArray(chapters) || chapters.length === 0) return null;
+  let active = null;
+  for (const ch of chapters) {
+    if (timeMs >= (ch.time_ms || 0)) {
+      active = ch;
+    } else {
+      break;
+    }
+  }
+  return active;
+}
+
+function syncQueueControlsAndSmtc() {
+  const q = store.playlistQueue || [];
+  const idx = store.playlistIndex;
+  const hasPrev = q.length > 1 && idx > 0;
+  const hasNext = q.length > 1 && idx >= 0 && idx < q.length - 1;
+
+  const btnPrev = document.getElementById("btn-player-prev");
+  const btnNext = document.getElementById("btn-player-next");
+  const btnQueue = document.getElementById("btn-player-queue");
+  const pill = document.getElementById("player-queue-pill");
+
+  if (btnPrev) btnPrev.disabled = !hasPrev;
+  if (btnNext) btnNext.disabled = !hasNext;
+  if (btnQueue) {
+    btnQueue.textContent = q.length > 1 ? `☰ Queue (${q.length})` : "☰ Queue";
+  }
+  if (pill) {
+    if (q.length > 1 && idx >= 0) {
+      pill.textContent = `Ep ${idx + 1} / ${q.length}`;
+      pill.classList.remove("hidden");
+    } else {
+      pill.classList.add("hidden");
+    }
+  }
+
+  invokeCmd("player_sync_smtc", { hasPrev, hasNext }).catch(() => {});
+}
+
+async function tryPopulateSiblingQueueForUrl(targetUrl) {
+  const targetKey = normalizeMediaUrlKey(targetUrl);
+  // If targetUrl is already in current playlistQueue, just update playlistIndex!
+  const existingIdx = (store.playlistQueue || []).findIndex(
+    (item) => !item.isLocal && normalizeMediaUrlKey(item.url) === targetKey
+  );
+  if (existingIdx !== -1) {
+    store.playlistIndex = existingIdx;
+    syncQueueControlsAndSmtc();
+    return store.playlistQueue[existingIdx];
+  }
+
+  // Otherwise check cached page media catalogs (active tab first, then other open tabs)
+  const catalogs = [];
+  const activeTab = (store.tabs || []).find((t) => t.is_active);
+  if (activeTab && store.pageMediaByTab[activeTab.id]) {
+    catalogs.push(store.pageMediaByTab[activeTab.id]);
+  } else if (activeTab) {
+    try {
+      const fetched = await invokeCmd("tab_get_page_media", { tabId: activeTab.id });
+      if (fetched) {
+        store.pageMediaByTab[activeTab.id] = fetched;
+        catalogs.push(fetched);
+      }
+    } catch (_) {}
+  }
+  for (const [tid, cat] of Object.entries(store.pageMediaByTab || {})) {
+    if (!activeTab || tid !== activeTab.id) catalogs.push(cat);
+  }
+
+  for (const cat of catalogs) {
+    const items = cat?.items || [];
+    const mediaItems = items.filter((i) => i.kind === "video" || i.kind === "audio");
+    const subItems = items.filter((i) => i.kind === "subtitle");
+    const matchIdx = mediaItems.findIndex((m) => normalizeMediaUrlKey(m.url) === targetKey);
+    if (matchIdx !== -1) {
+      store.playlistQueue = mediaItems.map((m) => ({
+        url: m.url,
+        title: m.filename || m.title || m.url,
+        isLocal: false,
+        localPath: null,
+        matchedSubtitles: matchSubtitleItemsForMediaUrl(m.url, subItems),
+      }));
+      store.playlistIndex = matchIdx;
+      syncQueueControlsAndSmtc();
+      return store.playlistQueue[matchIdx];
+    }
+  }
+
+  // Single standalone stream item
+  store.playlistQueue = [
+    {
+      url: targetUrl,
+      title: extractDecodedStemAndExt(targetUrl)?.filename || targetUrl,
+      isLocal: false,
+      localPath: null,
+      matchedSubtitles: [],
+    },
+  ];
+  store.playlistIndex = 0;
+  syncQueueControlsAndSmtc();
+  return store.playlistQueue[0];
+}
 
 export function hidePlayerTimeTooltip() {
   const timelineTip = document.getElementById("player-timeline-tip");
@@ -38,18 +209,23 @@ export function initPlayerModule({ onSwitchView, onDownloadMedia, onOpenExternal
   switchViewFn = onSwitchView;
 
   const btnBackBrowser = document.getElementById("btn-player-back-browser");
+  const btnOpenLocal = document.getElementById("btn-player-open-local");
   const btnOpenUrl = document.getElementById("btn-player-open-url-prompt");
   const btnHandoffExt = document.getElementById("btn-player-handoff-ext");
   const btnSavePerm = document.getElementById("btn-player-save-perm");
+  const queuePill = document.getElementById("player-queue-pill");
 
   const canvas = document.getElementById("player-video-canvas");
   const timeline = document.getElementById("player-timeline");
   const timelineTip = document.getElementById("player-timeline-tip");
 
+  const btnPrev = document.getElementById("btn-player-prev");
   const btnPlay = document.getElementById("btn-player-play");
+  const btnNext = document.getElementById("btn-player-next");
   const btnStop = document.getElementById("btn-player-stop");
   const btnSeekBack = document.getElementById("btn-player-seek-back");
   const btnSeekFwd = document.getElementById("btn-player-seek-fwd");
+  const btnQueue = document.getElementById("btn-player-queue");
   const btnMute = document.getElementById("btn-player-mute");
   const volSlider = document.getElementById("player-volume-slider");
 
@@ -57,12 +233,20 @@ export function initPlayerModule({ onSwitchView, onDownloadMedia, onOpenExternal
   const audioSelect = document.getElementById("player-audio-select");
   const subSelect = document.getElementById("player-sub-select");
   const btnLoadSub = document.getElementById("btn-player-load-sub");
+  const btnSyncFx = document.getElementById("btn-player-sync-fx");
+  const btnDialogueBoost = document.getElementById("btn-player-dialogue-boost");
+  const btnScreenshot = document.getElementById("btn-player-screenshot");
   const aspectSelect = document.getElementById("player-aspect-select");
   const btnPip = document.getElementById("btn-player-pip");
   const btnFullscreen = document.getElementById("btn-player-fullscreen");
 
   btnBackBrowser.addEventListener("click", () => switchViewFn("browser"));
+  btnOpenLocal.addEventListener("click", () => promptOpenLocalMediaFiles());
   btnOpenUrl.addEventListener("click", () => promptDirectMediaUrlModal());
+  queuePill?.addEventListener("click", () => openPlaylistQueueModal());
+  btnQueue?.addEventListener("click", () => openPlaylistQueueModal());
+  btnPrev?.addEventListener("click", () => playPrevInQueue());
+  btnNext?.addEventListener("click", () => playNextInQueue(false));
 
   btnHandoffExt.addEventListener("click", () => {
     const url = store.playerState?.original_url;
@@ -70,13 +254,18 @@ export function initPlayerModule({ onSwitchView, onDownloadMedia, onOpenExternal
       showToast("No media currently loaded", "error");
       return;
     }
-    onOpenExternal(url, store.playerState.title);
+    const cleanTarget = url.startsWith("local://") ? url.slice("local://".length) : url;
+    onOpenExternal(cleanTarget, store.playerState.title);
   });
 
   btnSavePerm.addEventListener("click", () => {
     const url = store.playerState?.original_url;
     if (!url) {
       showToast("No media currently loaded", "error");
+      return;
+    }
+    if (url.startsWith("local://")) {
+      showToast("This file is already stored locally on your computer", "info");
       return;
     }
     onDownloadMedia(url);
@@ -103,20 +292,22 @@ export function initPlayerModule({ onSwitchView, onDownloadMedia, onOpenExternal
     (ev) => {
       ev.preventDefault();
       const step = ev.deltaY < 0 ? 5 : -5;
-      setVolume((store.playerState.volume || 100) + step);
+      setVolume((store.playerState.volume ?? 100) + step);
     },
     { passive: false }
   );
 
-  // Timeline hover & click-to-seek:
-  // When native libmpv video surface is active, render via owned Win32 popup (`StreamVaultTimeTip`)
-  // so the Time Tooltip sits cleanly OVER the video frame instead of underneath it!
+  // Timeline hover & click-to-seek with MKV Chapter title readout!
   timeline.addEventListener("mousemove", (ev) => {
     const dur = store.playerState.duration_ms || 0;
     if (dur <= 0) return;
     const rect = timeline.getBoundingClientRect();
     const ratio = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
-    const label = formatTimeMs(Math.round(dur * ratio));
+    const hoverMs = Math.round(dur * ratio);
+    const chap = findChapterAtTimeMs(store.playerState.chapters, hoverMs);
+    const label = chap
+      ? `${formatTimeMs(hoverMs)} • ${chap.title}`
+      : formatTimeMs(hoverMs);
 
     const useNativeTip =
       store.playerState.active &&
@@ -169,6 +360,7 @@ export function initPlayerModule({ onSwitchView, onDownloadMedia, onOpenExternal
       const snap = await invokeCmd("player_stop");
       store.streamCacheStatus = null;
       updatePlayerState(snap);
+      syncQueueControlsAndSmtc();
     } catch (e) {
       showToast(String(e), "error");
     }
@@ -178,8 +370,12 @@ export function initPlayerModule({ onSwitchView, onDownloadMedia, onOpenExternal
   btnSeekFwd.addEventListener("click", () => seekByConfiguredInterval(1));
 
   btnMute.addEventListener("click", async () => {
-    const snap = await invokeCmd("player_toggle_mute");
-    updatePlayerState(snap);
+    try {
+      const snap = await invokeCmd("player_toggle_mute");
+      updatePlayerState(snap);
+    } catch (e) {
+      showToast(String(e), "error");
+    }
   });
 
   volSlider.addEventListener("input", () => {
@@ -187,22 +383,34 @@ export function initPlayerModule({ onSwitchView, onDownloadMedia, onOpenExternal
   });
 
   speedSelect.addEventListener("change", async () => {
-    const snap = await invokeCmd("player_set_speed", { speed: Number(speedSelect.value) });
-    updatePlayerState(snap);
+    try {
+      const snap = await invokeCmd("player_set_speed", { speed: Number(speedSelect.value) });
+      updatePlayerState(snap);
+    } catch (e) {
+      showToast(String(e), "error");
+    }
   });
 
   audioSelect.addEventListener("change", async () => {
     const id = Number(audioSelect.value);
     if (!id) return;
-    const snap = await invokeCmd("player_set_audio_track", { trackId: id });
-    updatePlayerState(snap);
+    try {
+      const snap = await invokeCmd("player_set_audio_track", { trackId: id });
+      updatePlayerState(snap);
+    } catch (e) {
+      showToast(String(e), "error");
+    }
   });
 
   subSelect.addEventListener("change", async () => {
     const val = subSelect.value;
     const trackId = val === "off" || val === "" ? null : Number(val);
-    const snap = await invokeCmd("player_set_subtitle_track", { trackId });
-    updatePlayerState(snap);
+    try {
+      const snap = await invokeCmd("player_set_subtitle_track", { trackId });
+      updatePlayerState(snap);
+    } catch (e) {
+      showToast(String(e), "error");
+    }
   });
 
   btnLoadSub.addEventListener("click", async () => {
@@ -217,9 +425,17 @@ export function initPlayerModule({ onSwitchView, onDownloadMedia, onOpenExternal
     }
   });
 
+  btnSyncFx?.addEventListener("click", () => openSyncAndSubtitleFxModal());
+  btnDialogueBoost?.addEventListener("click", () => toggleDialogueBoost());
+  btnScreenshot?.addEventListener("click", () => capturePlayerScreenshot());
+
   aspectSelect.addEventListener("change", async () => {
-    const snap = await invokeCmd("player_set_aspect_ratio", { ratio: aspectSelect.value });
-    updatePlayerState(snap);
+    try {
+      const snap = await invokeCmd("player_set_aspect_ratio", { ratio: aspectSelect.value });
+      updatePlayerState(snap);
+    } catch (e) {
+      showToast(String(e), "error");
+    }
   });
 
   btnPip.addEventListener("click", async () => {
@@ -249,11 +465,225 @@ export function initPlayerModule({ onSwitchView, onDownloadMedia, onOpenExternal
   });
 }
 
-export async function initiateInAppPlayback(url, customTitle = null, forcePositionMs = null) {
+export async function openLocalMediaFile(filePath, startPositionMs = null) {
   try {
+    switchViewFn("player");
+    const name = filePath.split(/[\\/]/).pop() || filePath;
+    document.getElementById("player-title-text").textContent = name;
+    store.streamCacheStatus = null;
+    const snap = await invokeCmd("player_open_local_file", {
+      filePath,
+      startPositionMs,
+    });
+    updatePlayerState(snap);
+    store.recentMedia = await invokeCmd("recent_media_list", { limit: 60 });
+    syncQueueControlsAndSmtc();
+    syncPlayerSurfaceViewport();
+  } catch (e) {
+    showToast(`Failed opening local file: ${e}`, "error");
+  }
+}
+
+export async function promptOpenLocalMediaFiles() {
+  try {
+    const paths = await invokeCmd("player_browse_and_open_local_media");
+    if (!paths || paths.length === 0) return;
+    const mediaPaths = [];
+    const subPaths = [];
+    for (const p of paths) {
+      const ext = (p.split(".").pop() || "").toLowerCase();
+      if (SUB_EXTS.has(ext)) subPaths.push(p);
+      else mediaPaths.push(p);
+    }
+    await handleDroppedOrPickedLocalFiles(mediaPaths, subPaths);
+  } catch (e) {
+    showToast(String(e), "error");
+  }
+}
+
+export async function handleDroppedOrPickedLocalFiles(mediaPaths = [], subtitlePaths = []) {
+  if (mediaPaths.length > 0) {
+    store.playlistQueue = mediaPaths.map((p) => ({
+      url: `local://${p.replace(/\\/g, "/")}`,
+      title: p.split(/[\\/]/).pop() || p,
+      isLocal: true,
+      localPath: p,
+      matchedSubtitles: [],
+    }));
+    store.playlistIndex = 0;
+    await openLocalMediaFile(mediaPaths[0], null);
+    for (const sp of subtitlePaths) {
+      try {
+        const snap = await invokeCmd("player_load_external_subtitle_path", { filePath: sp });
+        updatePlayerState(snap);
+      } catch (_) {}
+    }
+    if (mediaPaths.length > 1) {
+      showToast(`Queued ${mediaPaths.length} local files in playlist`, "success");
+    }
+    return;
+  }
+
+  if (subtitlePaths.length > 0) {
+    if (!store.playerState.active) {
+      showToast("Start playing a video first before dropping a subtitle file", "error");
+      return;
+    }
+    for (const sp of subtitlePaths) {
+      try {
+        const snap = await invokeCmd("player_load_external_subtitle_path", { filePath: sp });
+        updatePlayerState(snap);
+        const subName = sp.split(/[\\/]/).pop() || sp;
+        showToast(`Loaded subtitle: ${subName}`, "success");
+      } catch (e) {
+        showToast(String(e), "error");
+      }
+    }
+  }
+}
+
+export async function setCustomPlaylistAndPlay(items, startIndex = 0) {
+  if (!Array.isArray(items) || items.length === 0) return;
+  store.playlistQueue = items;
+  store.playlistIndex = Math.max(0, Math.min(items.length - 1, startIndex));
+  await playQueueAtIndex(store.playlistIndex, false);
+}
+
+export async function playQueueAtIndex(index, fromAutoAdvance = false) {
+  const q = store.playlistQueue || [];
+  if (index < 0 || index >= q.length) return false;
+  store.playlistIndex = index;
+  const entry = q[index];
+  syncQueueControlsAndSmtc();
+
+  if (entry.isLocal && entry.localPath) {
+    await openLocalMediaFile(entry.localPath, fromAutoAdvance ? 0 : null);
+  } else {
+    await initiateInAppPlayback(entry.url, entry.title, fromAutoAdvance ? 0 : null, true);
+  }
+  return true;
+}
+
+export async function playNextInQueue(fromAutoAdvance = false) {
+  const q = store.playlistQueue || [];
+  const nextIdx = store.playlistIndex + 1;
+  if (nextIdx >= 0 && nextIdx < q.length) {
+    const nextItem = q[nextIdx];
+    if (fromAutoAdvance) {
+      wakeFullscreenHud();
+      showToast(`▶ Next episode: ${nextItem.title}`, "info");
+    }
+    return playQueueAtIndex(nextIdx, fromAutoAdvance);
+  }
+  return false;
+}
+
+export async function playPrevInQueue() {
+  const prevIdx = store.playlistIndex - 1;
+  if (prevIdx >= 0 && prevIdx < (store.playlistQueue || []).length) {
+    return playQueueAtIndex(prevIdx, false);
+  }
+  return false;
+}
+
+export async function handlePlayerPlaybackEnded(payload) {
+  // MPV_END_FILE_REASON_EOF === 0 (natural end-of-file, not user stop/replace)
+  const reason = payload?.reason;
+  if (reason === 4 || payload?.error) {
+    wakeFullscreenHud();
+    showToast(
+      `Playback error: ${payload?.error || "Failed decoding or streaming media"}`,
+      "error"
+    );
+    return;
+  }
+  const autoNext = store.settings?.auto_play_next_episode !== false;
+  if (reason === 0 && autoNext) {
+    const advanced = await playNextInQueue(true);
+    if (advanced) return;
+  }
+  if (reason === 0) {
+    wakeFullscreenHud();
+    store.recentMedia = await invokeCmd("recent_media_list", { limit: 60 }).catch(
+      () => store.recentMedia
+    );
+    showToast("Media playback finished", "info");
+  }
+}
+
+export async function handleMediaKeyCommand(action) {
+  switch (action) {
+    case "next":
+      await playNextInQueue(false);
+      break;
+    case "previous":
+      await playPrevInQueue();
+      break;
+    case "stop":
+      try {
+        const snap = await invokeCmd("player_stop");
+        store.streamCacheStatus = null;
+        updatePlayerState(snap);
+        syncQueueControlsAndSmtc();
+      } catch (_) {}
+      break;
+    case "play_pause":
+      if (store.playerState.active) await togglePlayPause();
+      break;
+    case "play":
+      if (store.playerState.active && store.playerState.paused) {
+        try {
+          const snap = await invokeCmd("player_set_pause", { paused: false });
+          updatePlayerState(snap);
+        } catch (_) {}
+      }
+      break;
+    case "pause":
+      if (store.playerState.active && !store.playerState.paused) {
+        try {
+          const snap = await invokeCmd("player_set_pause", { paused: true });
+          updatePlayerState(snap);
+        } catch (_) {}
+      }
+      break;
+    case "fast_forward":
+      if (store.playerState.active) await seekByConfiguredInterval(1);
+      break;
+    case "rewind":
+      if (store.playerState.active) await seekByConfiguredInterval(-1);
+      break;
+    case "exit_pip":
+      store.playerState.pip_active = false;
+      syncPlayerSurfaceViewport();
+      break;
+    default:
+      break;
+  }
+}
+
+export async function initiateInAppPlayback(
+  url,
+  customTitle = null,
+  forcePositionMs = null,
+  skipQueueRebuild = false
+) {
+  try {
+    if (typeof url === "string" && url.startsWith("local://")) {
+      const localPath = url.slice("local://".length);
+      await openLocalMediaFile(localPath, forcePositionMs);
+      return;
+    }
+
     switchViewFn("player");
     document.getElementById("player-title-text").textContent =
       customTitle || "Connecting to media stream...";
+
+    let queueEntry = null;
+    if (!skipQueueRebuild) {
+      queueEntry = await tryPopulateSiblingQueueForUrl(url);
+    } else {
+      queueEntry = (store.playlistQueue || [])[store.playlistIndex] || null;
+    }
 
     let res;
     if (forcePositionMs !== null) {
@@ -291,11 +721,11 @@ export async function initiateInAppPlayback(url, customTitle = null, forcePositi
           card.querySelector("#btn-resume-cancel").onclick = closeModal;
           card.querySelector("#btn-resume-yes").onclick = async () => {
             closeModal();
-            await initiateInAppPlayback(url, customTitle, pos.position_ms);
+            await initiateInAppPlayback(url, customTitle, pos.position_ms, true);
           };
           card.querySelector("#btn-resume-zero").onclick = async () => {
             closeModal();
-            await initiateInAppPlayback(url, customTitle, 0);
+            await initiateInAppPlayback(url, customTitle, 0, true);
           };
         }
       );
@@ -308,7 +738,29 @@ export async function initiateInAppPlayback(url, customTitle = null, forcePositi
     if (res.player_state) {
       updatePlayerState(res.player_state);
     }
+
+    // Auto-attach stem-matched server subtitles (.srt / .ass / .vtt) when enabled!
+    if (
+      store.settings?.auto_load_matching_subtitle !== false &&
+      queueEntry &&
+      Array.isArray(queueEntry.matchedSubtitles) &&
+      queueEntry.matchedSubtitles.length > 0
+    ) {
+      for (let i = 0; i < queueEntry.matchedSubtitles.length; i++) {
+        const subUrl = queueEntry.matchedSubtitles[i];
+        try {
+          const snap = await invokeCmd("player_load_external_subtitle_url", {
+            subtitleUrl: subUrl,
+            select: i === 0,
+          });
+          updatePlayerState(snap);
+        } catch (_) {}
+      }
+      showToast("Auto-loaded matching server subtitle", "success");
+    }
+
     store.recentMedia = await invokeCmd("recent_media_list", { limit: 60 });
+    syncQueueControlsAndSmtc();
     syncPlayerSurfaceViewport();
   } catch (e) {
     showToast(`Playback failed: ${e}`, "error");
@@ -335,21 +787,331 @@ export function promptDirectMediaUrlModal() {
     (card) => {
       const inp = card.querySelector("#modal-direct-stream-url");
       inp.focus();
-      card.querySelector("#modal-stream-cancel").onclick = closeModal;
-      card.querySelector("#modal-stream-play").onclick = () => {
+      const submit = () => {
         const val = inp.value.trim();
         if (!val) return;
         closeModal();
         initiateInAppPlayback(val, null, null);
       };
+      inp.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          submit();
+        }
+      });
+      card.querySelector("#modal-stream-cancel").onclick = closeModal;
+      card.querySelector("#modal-stream-play").onclick = submit;
     }
   );
+}
+
+export function openPlaylistQueueModal() {
+  const q = store.playlistQueue || [];
+  const activeIdx = store.playlistIndex;
+  openModal(
+    `
+      <h3>Episode &amp; Media Playlist Queue (${q.length})</h3>
+      <p style="margin:0;font-size:12px;color:var(--text-secondary);">
+        Sibling episodes from directory pages or multi-file selections queue automatically.
+      </p>
+      <div class="grabber-list-box" style="max-height:310px;">
+        ${
+          q.length === 0
+            ? `<div style="padding:14px;color:var(--text-muted);font-size:12.5px;text-align:center;">
+                 Queue is empty. Open a directory media link, use <strong>⬇ Grab</strong>, or click <strong>📂 Add Local Files</strong>.
+               </div>`
+            : q
+                .map((item, idx) => {
+                  const isCurr = idx === activeIdx;
+                  const subBadge =
+                    item.matchedSubtitles && item.matchedSubtitles.length > 0
+                      ? `<span class="grabber-ext-tag subtitle">SUB</span>`
+                      : "";
+                  return `
+                    <div class="grabber-item-row" data-q-idx="${idx}" style="${
+                      isCurr
+                        ? "background:rgba(56,189,248,0.16);border:1px solid rgba(56,189,248,0.4);"
+                        : ""
+                    }">
+                      <span style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted);min-width:26px;">
+                        ${isCurr ? "▶" : idx + 1 + "."}
+                      </span>
+                      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:${
+                        isCurr ? "600" : "400"
+                      };">
+                        ${escapeHtml(item.title)}
+                      </span>
+                      ${subBadge}
+                    </div>
+                  `;
+                })
+                .join("")
+        }
+      </div>
+      <div class="modal-actions">
+        <button id="q-add-local" class="btn" style="margin-right:auto;">📂 Add Local Files…</button>
+        ${q.length > 1 ? `<button id="q-clear" class="btn">Clear Queue</button>` : ""}
+        <button id="q-close" class="btn btn-primary">Done</button>
+      </div>
+    `,
+    (card) => {
+      card.querySelector("#q-close").onclick = closeModal;
+      card.querySelector("#q-add-local").onclick = async () => {
+        closeModal();
+        await promptOpenLocalMediaFiles();
+      };
+      const clearBtn = card.querySelector("#q-clear");
+      if (clearBtn) {
+        clearBtn.onclick = () => {
+          const curr = (store.playlistQueue || [])[store.playlistIndex];
+          store.playlistQueue = curr ? [curr] : [];
+          store.playlistIndex = curr ? 0 : -1;
+          syncQueueControlsAndSmtc();
+          closeModal();
+        };
+      }
+      card.querySelectorAll("[data-q-idx]").forEach((row) => {
+        row.onclick = async () => {
+          const idx = Number(row.getAttribute("data-q-idx"));
+          closeModal();
+          await playQueueAtIndex(idx, false);
+        };
+      });
+    }
+  );
+}
+
+export function openSyncAndSubtitleFxModal() {
+  const st = store.playerState;
+  const subDelay = st.sub_delay_ms || 0;
+  const audDelay = st.audio_delay_ms || 0;
+  const subScalePct = Math.round((st.sub_scale || 1.0) * 100);
+
+  openModal(
+    `
+      <h3>Subtitle &amp; Audio Sync + Subtitle Size</h3>
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px;">
+            <span>Subtitle Delay (Shortcuts: <strong>Z</strong> / <strong>X</strong>)</span>
+            <strong id="fx-sub-delay-val" style="font-family:var(--font-mono);color:var(--accent);">
+              ${subDelay >= 0 ? "+" : ""}${subDelay} ms
+            </strong>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button class="btn btn-sm" data-sub-step="-500">-500 ms</button>
+            <button class="btn btn-sm" data-sub-step="-100">-100 ms</button>
+            <button class="btn btn-sm" data-sub-reset="1">Reset (0 ms)</button>
+            <button class="btn btn-sm" data-sub-step="100">+100 ms</button>
+            <button class="btn btn-sm" data-sub-step="500">+500 ms</button>
+          </div>
+        </div>
+
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px;">
+            <span>Audio Track Delay (A/V Lip-Sync)</span>
+            <strong id="fx-aud-delay-val" style="font-family:var(--font-mono);color:var(--accent);">
+              ${audDelay >= 0 ? "+" : ""}${audDelay} ms
+            </strong>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button class="btn btn-sm" data-aud-step="-500">-500 ms</button>
+            <button class="btn btn-sm" data-aud-step="-100">-100 ms</button>
+            <button class="btn btn-sm" data-aud-reset="1">Reset (0 ms)</button>
+            <button class="btn btn-sm" data-aud-step="100">+100 ms</button>
+            <button class="btn btn-sm" data-aud-step="500">+500 ms</button>
+          </div>
+        </div>
+
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px;">
+            <span>Subtitle Scale</span>
+            <strong id="fx-sub-scale-val" style="font-family:var(--font-mono);color:var(--accent);">
+              ${subScalePct}%
+            </strong>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <input id="fx-sub-scale-slider" type="range" min="50" max="240" step="5" value="${subScalePct}" style="flex:1;" />
+            <button id="fx-sub-scale-reset" class="btn btn-sm">100%</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button id="fx-close" class="btn btn-primary">Done</button>
+      </div>
+    `,
+    (card) => {
+      const subValEl = card.querySelector("#fx-sub-delay-val");
+      const audValEl = card.querySelector("#fx-aud-delay-val");
+      const scaleValEl = card.querySelector("#fx-sub-scale-val");
+      const scaleSlider = card.querySelector("#fx-sub-scale-slider");
+
+      const applySub = async (nextMs) => {
+        try {
+          const snap = await invokeCmd("player_set_sub_delay", { delayMs: nextMs });
+          updatePlayerState(snap);
+          subValEl.textContent = `${snap.sub_delay_ms >= 0 ? "+" : ""}${snap.sub_delay_ms} ms`;
+        } catch (e) {
+          showToast(String(e), "error");
+        }
+      };
+      const applyAud = async (nextMs) => {
+        try {
+          const snap = await invokeCmd("player_set_audio_delay", { delayMs: nextMs });
+          updatePlayerState(snap);
+          audValEl.textContent = `${snap.audio_delay_ms >= 0 ? "+" : ""}${snap.audio_delay_ms} ms`;
+        } catch (e) {
+          showToast(String(e), "error");
+        }
+      };
+
+      card.querySelectorAll("[data-sub-step]").forEach((btn) => {
+        btn.onclick = () =>
+          applySub((store.playerState.sub_delay_ms || 0) + Number(btn.getAttribute("data-sub-step")));
+      });
+      card.querySelector("[data-sub-reset]").onclick = () => applySub(0);
+
+      card.querySelectorAll("[data-aud-step]").forEach((btn) => {
+        btn.onclick = () =>
+          applyAud(
+            (store.playerState.audio_delay_ms || 0) + Number(btn.getAttribute("data-aud-step"))
+          );
+      });
+      card.querySelector("[data-aud-reset]").onclick = () => applyAud(0);
+
+      scaleSlider.oninput = async () => {
+        const pct = Number(scaleSlider.value);
+        scaleValEl.textContent = `${pct}%`;
+        try {
+          const snap = await invokeCmd("player_set_sub_scale", { scale: pct / 100 });
+          updatePlayerState(snap);
+        } catch (_) {}
+      };
+      card.querySelector("#fx-sub-scale-reset").onclick = async () => {
+        scaleSlider.value = "100";
+        scaleValEl.textContent = "100%";
+        try {
+          const snap = await invokeCmd("player_set_sub_scale", { scale: 1.0 });
+          updatePlayerState(snap);
+        } catch (e) {
+          showToast(String(e), "error");
+        }
+      };
+      card.querySelector("#fx-close").onclick = closeModal;
+    }
+  );
+}
+
+export async function adjustSubDelayMs(deltaMs) {
+  try {
+    const next = (store.playerState.sub_delay_ms || 0) + deltaMs;
+    const snap = await invokeCmd("player_set_sub_delay", { delayMs: next });
+    updatePlayerState(snap);
+    wakeFullscreenHud();
+    showToast(`Subtitle delay: ${snap.sub_delay_ms >= 0 ? "+" : ""}${snap.sub_delay_ms} ms`, "info");
+  } catch (e) {
+    showToast(String(e), "error");
+  }
+}
+
+export async function toggleDialogueBoost() {
+  try {
+    const next = !store.playerState.dialogue_boost;
+    const snap = await invokeCmd("player_set_dialogue_boost", { enabled: next });
+    updatePlayerState(snap);
+    wakeFullscreenHud();
+    showToast(
+      next
+        ? "🌙 Dialogue Boost enabled (Night dynamic audio normalization)"
+        : "Dialogue Boost disabled",
+      "info"
+    );
+  } catch (e) {
+    showToast(String(e), "error");
+  }
+}
+
+export async function capturePlayerScreenshot() {
+  if (!store.playerState.active) {
+    showToast("Play a video first to capture a screenshot", "error");
+    return;
+  }
+  try {
+    const res = await invokeCmd("player_take_screenshot", { includeSubtitles: true });
+    if (!res?.native_overlay_shown) {
+      wakeFullscreenHud();
+      showToast(`📷 Saved ${res.filename}`, "success", {
+        label: "Reveal",
+        onClick: () => {
+          invokeCmd("player_reveal_path", { path: res.path }).catch(() => {});
+        },
+      });
+    }
+  } catch (e) {
+    showToast(`Screenshot failed: ${e}`, "error");
+  }
+}
+
+export async function jumpChapter(direction) {
+  const chapters = store.playerState.chapters || [];
+  if (chapters.length === 0) return false;
+  const pos = store.playerState.position_ms || 0;
+  let target = null;
+  if (direction > 0) {
+    target = chapters.find((c) => c.time_ms > pos + 900);
+  } else {
+    for (let i = chapters.length - 1; i >= 0; i--) {
+      if (chapters[i].time_ms < pos - 2500) {
+        target = chapters[i];
+        break;
+      }
+    }
+    if (!target) target = chapters[0];
+  }
+  if (!target) return false;
+  try {
+    const snap = await invokeCmd("player_seek_absolute", { positionMs: target.time_ms });
+    updatePlayerState(snap);
+    wakeFullscreenHud();
+    showToast(`Chapter: ${target.title}`, "info");
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function renderChapterMarkers(snap) {
+  const layer = document.getElementById("player-chapter-layer");
+  if (!layer) return;
+  const dur = snap.duration_ms || 0;
+  const chapters = snap.chapters || [];
+  if (dur <= 0 || chapters.length === 0) {
+    if (layer.innerHTML !== "") layer.innerHTML = "";
+    return;
+  }
+  layer.innerHTML = chapters
+    .filter((c) => c.time_ms > 0 && c.time_ms < dur)
+    .map((c) => {
+      const pct = ((c.time_ms / dur) * 100).toFixed(3);
+      return `<div class="timeline-chapter-tick" style="left:${pct}%;"></div>`;
+    })
+    .join("");
 }
 
 export function updatePlayerState(snap) {
   if (!snap) return;
   const prevFullscreen = store.playerState.fullscreen;
+  const prevPaused = store.playerState.paused;
   store.playerState = { ...store.playerState, ...snap, fullscreen: prevFullscreen };
+
+  if (prevFullscreen) {
+    if (!prevPaused && snap.paused) {
+      document.body.classList.remove("player-hud-idle");
+      clearTimeout(hudIdleTimer);
+    } else if (prevPaused && !snap.paused) {
+      wakeFullscreenHud();
+    }
+  }
 
   // While fullscreen HUD is hidden during active playback, skip mutating hidden WebView2 DOM
   // elements so WebView2 performs zero DirectComposition repaints (preventing DWM flicker).
@@ -387,6 +1149,8 @@ export function updatePlayerState(snap) {
       : 0;
   document.getElementById("player-timeline-played").style.width = `${pct}%`;
 
+  renderChapterMarkers(snap);
+
   const volSlider = document.getElementById("player-volume-slider");
   if (document.activeElement !== volSlider) {
     volSlider.value = String(snap.volume ?? 100);
@@ -406,6 +1170,20 @@ export function updatePlayerState(snap) {
       speedSel.appendChild(opt);
     }
     speedSel.value = speedStr;
+  }
+
+  // Highlight Sync & Dialogue Boost active states
+  const btnSync = document.getElementById("btn-player-sync-fx");
+  if (btnSync) {
+    const hasOffset =
+      (snap.sub_delay_ms || 0) !== 0 ||
+      (snap.audio_delay_ms || 0) !== 0 ||
+      Math.abs((snap.sub_scale || 1.0) - 1.0) > 0.04;
+    btnSync.classList.toggle("active-toggle", hasOffset);
+  }
+  const btnBoost = document.getElementById("btn-player-dialogue-boost");
+  if (btnBoost) {
+    btnBoost.classList.toggle("active-toggle", Boolean(snap.dialogue_boost));
   }
 
   // Populate Audio & Subtitle Track selectors
@@ -489,7 +1267,13 @@ export function renderStreamCacheTelemetry() {
 
   const cs = store.streamCacheStatus;
   if (!cs) {
-    pill.classList.add("hidden");
+    if (store.playerState?.original_url?.startsWith("local://") && store.playerState.active) {
+      pill.classList.remove("hidden");
+      pill.classList.remove("warning");
+      pill.textContent = "Local Direct Playback";
+    } else {
+      pill.classList.add("hidden");
+    }
     rangeBanner.classList.add("hidden");
     bufferLayer.innerHTML = "";
     return;
@@ -547,13 +1331,17 @@ export async function setVolume(vol) {
 }
 
 export async function stepPlaybackSpeed(direction) {
-  const curr = store.playerState.speed || 1.0;
-  let idx = SPEED_STEPS.findIndex((s) => Math.abs(s - curr) < 0.03);
-  if (idx === -1) idx = 3;
-  const nextIdx = Math.max(0, Math.min(SPEED_STEPS.length - 1, idx + direction));
-  const snap = await invokeCmd("player_set_speed", { speed: SPEED_STEPS[nextIdx] });
-  updatePlayerState(snap);
-  showToast(`Playback speed: ${SPEED_STEPS[nextIdx]}x`);
+  try {
+    const curr = store.playerState.speed || 1.0;
+    let idx = SPEED_STEPS.findIndex((s) => Math.abs(s - curr) < 0.03);
+    if (idx === -1) idx = 3;
+    const nextIdx = Math.max(0, Math.min(SPEED_STEPS.length - 1, idx + direction));
+    const snap = await invokeCmd("player_set_speed", { speed: SPEED_STEPS[nextIdx] });
+    updatePlayerState(snap);
+    showToast(`Playback speed: ${SPEED_STEPS[nextIdx]}x`);
+  } catch (e) {
+    showToast(String(e), "error");
+  }
 }
 
 export async function toggleFullscreen(explicit = null) {
@@ -600,8 +1388,15 @@ export function syncPlayerSurfaceViewport() {
   const canvas = document.getElementById("player-video-canvas");
   if (!canvas) return;
 
+  const tracks = store.playerState.tracks || [];
+  const isAudioOnlyLoaded =
+    tracks.length > 0 &&
+    !tracks.some((t) => t.type === "video" && t.selected) &&
+    !(store.playerState.video_width > 0 && store.playerState.video_height > 0);
+
   const hasVideo =
     store.playerState.active &&
+    !isAudioOnlyLoaded &&
     !store.modalOpen &&
     store.currentView === "player" &&
     !store.playerState.pip_active;
@@ -623,7 +1418,11 @@ export function syncPlayerSurfaceViewport() {
 
   const rect = canvas.getBoundingClientRect();
   const visible = rect.width > 16 && rect.height > 16;
-  lastViewportSig = visible ? "shown" : "hidden";
+  const sig = visible
+    ? `${Math.round(rect.left)}:${Math.round(rect.top)}:${Math.round(rect.width)}:${Math.round(rect.height)}`
+    : "hidden";
+  if (sig === lastViewportSig) return;
+  lastViewportSig = sig;
   invokeCmd("player_set_viewport", {
     visible,
     x: rect.left,
@@ -633,8 +1432,8 @@ export function syncPlayerSurfaceViewport() {
   }).catch(() => {});
 }
 
-export function handlePlayerKeyShortcut(code) {
-  if (store.currentView !== "player") return false;
+export function handlePlayerKeyShortcut(code, fromSurface = false) {
+  if (store.currentView !== "player" && !fromSurface) return false;
   const sc = store.settings?.shortcuts || {};
   if (code === (sc.play_pause || "Space")) {
     togglePlayPause();
@@ -649,11 +1448,11 @@ export function handlePlayerKeyShortcut(code) {
     return true;
   }
   if (code === (sc.volume_up || "ArrowUp")) {
-    setVolume((store.playerState.volume || 100) + 5);
+    setVolume((store.playerState.volume ?? 100) + 5);
     return true;
   }
   if (code === (sc.volume_down || "ArrowDown")) {
-    setVolume((store.playerState.volume || 100) - 5);
+    setVolume((store.playerState.volume ?? 100) - 5);
     return true;
   }
   if (code === (sc.toggle_mute || "KeyM")) {
@@ -664,9 +1463,20 @@ export function handlePlayerKeyShortcut(code) {
     toggleFullscreen();
     return true;
   }
-  if (code === (sc.exit_fullscreen || "Escape") && store.playerState.fullscreen) {
-    toggleFullscreen(false);
-    return true;
+  if (code === (sc.exit_fullscreen || "Escape")) {
+    if (store.playerState.fullscreen) {
+      toggleFullscreen(false);
+      return true;
+    }
+    if (store.playerState.pip_active) {
+      invokeCmd("player_set_pip", { enable: false })
+        .then((s) => {
+          updatePlayerState(s);
+          syncPlayerSurfaceViewport();
+        })
+        .catch(() => {});
+      return true;
+    }
   }
   if (code === (sc.speed_down || "BracketLeft")) {
     stepPlaybackSpeed(-1);
@@ -674,6 +1484,34 @@ export function handlePlayerKeyShortcut(code) {
   }
   if (code === (sc.speed_up || "BracketRight")) {
     stepPlaybackSpeed(1);
+    return true;
+  }
+  if (code === "KeyZ") {
+    adjustSubDelayMs(-100);
+    return true;
+  }
+  if (code === "KeyX") {
+    adjustSubDelayMs(100);
+    return true;
+  }
+  if (code === "KeyS") {
+    capturePlayerScreenshot();
+    return true;
+  }
+  if (code === "KeyN") {
+    playNextInQueue(false);
+    return true;
+  }
+  if (code === "KeyP") {
+    playPrevInQueue();
+    return true;
+  }
+  if (code === "PageDown") {
+    jumpChapter(1);
+    return true;
+  }
+  if (code === "PageUp") {
+    jumpChapter(-1);
     return true;
   }
   return false;

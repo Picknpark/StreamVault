@@ -5,12 +5,16 @@ import { escapeHtml, formatTimeMs, showToast } from "./utils.js";
 let switchViewFn = null;
 let playMediaFn = null;
 
-export function initHomeModule({ onSwitchView, onPlayMedia }) {
+export function initHomeModule({ onSwitchView, onPlayMedia, onOpenLocalMedia }) {
   switchViewFn = onSwitchView;
   playMediaFn = onPlayMedia;
 
   const form = document.getElementById("home-search-form");
   const input = document.getElementById("home-omnibox-input");
+
+  document.getElementById("btn-home-open-local")?.addEventListener("click", () => {
+    if (typeof onOpenLocalMedia === "function") onOpenLocalMedia();
+  });
 
   form.addEventListener("submit", async (ev) => {
     ev.preventDefault();
@@ -39,7 +43,7 @@ export async function renderHomePanel() {
   if (!recentBox || !bmBox || !histBox) return;
 
   try {
-    const freshRecent = await invokeCmd("recent_media_list", { limit: 20 });
+    const freshRecent = await invokeCmd("recent_media_list", { limit: 60 });
     if (Array.isArray(freshRecent)) {
       store.recentMedia = freshRecent;
     }
@@ -99,19 +103,23 @@ export async function renderHomePanel() {
       const url = row.getAttribute("data-home-url");
       row.querySelector("button").onclick = () => {
         switchViewFn("browser");
-        invokeCmd("tab_navigate", { tabId: null, input: url });
+        invokeCmd("tab_navigate", { tabId: null, input: url }).catch((e) =>
+          showToast(String(e), "error")
+        );
       };
     });
   }
 
-  let hist = store.history || [];
-  if (hist.length === 0) {
-    try {
-      hist = await invokeCmd("history_list", { query: null, limit: 5 });
-      store.history = hist;
-    } catch (_) {}
-  }
-  const topHist = hist.slice(0, 5);
+  let topHist = (store.history || []).slice(0, 5);
+  try {
+    const latestHist = await invokeCmd("history_list", { query: null, limit: 5 });
+    if (Array.isArray(latestHist)) {
+      topHist = latestHist.slice(0, 5);
+      if (!store.history || store.history.length === 0) {
+        store.history = latestHist;
+      }
+    }
+  } catch (_) {}
   if (topHist.length === 0) {
     histBox.innerHTML = `<div style="color:var(--text-muted);font-size:12px;">No recent browsing history.</div>`;
   } else {
@@ -133,7 +141,9 @@ export async function renderHomePanel() {
       const url = row.getAttribute("data-home-hurl");
       row.querySelector("button").onclick = () => {
         switchViewFn("browser");
-        invokeCmd("tab_navigate", { tabId: null, input: url });
+        invokeCmd("tab_navigate", { tabId: null, input: url }).catch((e) =>
+          showToast(String(e), "error")
+        );
       };
     });
   }

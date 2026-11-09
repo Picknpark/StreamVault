@@ -15,7 +15,7 @@ export function initDownloadsModule() {
   const btnStart = document.getElementById("btn-start-direct-dl");
   const btnClear = document.getElementById("btn-clear-completed-dl");
 
-  btnStart.addEventListener("click", () => {
+  const submitDirectDownload = () => {
     const url = input.value.trim();
     if (!url) {
       showToast("Enter a direct media URL to download", "error");
@@ -23,6 +23,14 @@ export function initDownloadsModule() {
     }
     input.value = "";
     triggerPermanentDownload(url, true);
+  };
+
+  btnStart.addEventListener("click", submitDirectDownload);
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      submitDirectDownload();
+    }
   });
 
   btnClear.addEventListener("click", async () => {
@@ -195,7 +203,10 @@ export function renderDownloadsPanel() {
                 : ""
             }
             ${
-              d.status === "downloading" || d.status === "paused" || d.status === "queued"
+              d.status === "downloading" ||
+              d.status === "paused" ||
+              d.status === "interrupted" ||
+              d.status === "queued"
                 ? `<button class="btn btn-danger btn-sm" data-dl-act="cancel">✕ Cancel</button>`
                 : ""
             }
@@ -208,7 +219,7 @@ export function renderDownloadsPanel() {
             <button class="btn btn-sm" data-dl-act="save-copy">⬇ Save As...</button>
             <button class="btn btn-sm" data-dl-act="copy-url">⧉ Copy URL</button>
             ${
-              d.status !== "downloading"
+              d.status !== "downloading" && d.status !== "queued"
                 ? `<button class="btn btn-sm" data-dl-act="remove" style="margin-left:auto;">Remove Entry</button>`
                 : ""
             }

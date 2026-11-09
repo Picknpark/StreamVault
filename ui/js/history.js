@@ -31,11 +31,19 @@ export function initHistoryModule({ onSwitchView }) {
   });
 }
 
-export async function refreshHistory(query = "") {
-  store.history = await invokeCmd("history_list", {
-    query: query || null,
-    limit: 500,
-  });
+export async function refreshHistory(query = undefined) {
+  const effectiveQuery =
+    query !== undefined
+      ? query
+      : document.getElementById("history-search-input")?.value?.trim() || "";
+  try {
+    store.history = await invokeCmd("history_list", {
+      query: effectiveQuery || null,
+      limit: 500,
+    });
+  } catch (e) {
+    showToast(String(e), "error");
+  }
   renderHistoryPanel();
 }
 
@@ -93,15 +101,19 @@ export function renderHistoryPanel() {
     row.querySelectorAll("[data-ha]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const act = btn.getAttribute("data-ha");
-        if (act === "open") {
-          switchViewFn("browser");
-          await invokeCmd("tab_navigate", { tabId: null, input: item.url });
-        } else if (act === "newtab") {
-          switchViewFn("browser");
-          await invokeCmd("tab_create", { url: item.url, active: true });
-        } else if (act === "del") {
-          await invokeCmd("history_delete", { id: item.id });
-          await refreshHistory(document.getElementById("history-search-input")?.value || "");
+        try {
+          if (act === "open") {
+            switchViewFn("browser");
+            await invokeCmd("tab_navigate", { tabId: null, input: item.url });
+          } else if (act === "newtab") {
+            switchViewFn("browser");
+            await invokeCmd("tab_create", { url: item.url, active: true });
+          } else if (act === "del") {
+            await invokeCmd("history_delete", { id: item.id });
+            await refreshHistory();
+          }
+        } catch (e) {
+          showToast(String(e), "error");
         }
       });
     });
