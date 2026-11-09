@@ -1,0 +1,26 @@
+name: Feature Request
+description: Suggest an enhancement or new capability for StreamVault
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Motivation / Use Case
+      description: What workflow or problem would this feature make easier?
+      placeholder: "When browsing multi-episode season directories, I would like..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: Describe how you envision this working in StreamVault.
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional Context (Optional)
