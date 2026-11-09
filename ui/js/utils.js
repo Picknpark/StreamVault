@@ -63,16 +63,33 @@ export function formatTimestamp(ms) {
   }
 }
 
-export function showToast(message, kind = "info") {
+export function showToast(message, kind = "info", action = null) {
   const container = document.getElementById("toast-container");
   if (!container) return;
   const el = document.createElement("div");
   el.className = `toast ${kind}`;
-  el.textContent = message;
+  const span = document.createElement("span");
+  span.textContent = message;
+  el.appendChild(span);
+
+  if (action && action.label && typeof action.onClick === "function") {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn-sm";
+    btn.style.marginLeft = "10px";
+    btn.textContent = action.label;
+    btn.onclick = (ev) => {
+      ev.stopPropagation();
+      action.onClick();
+      if (el.parentNode) el.parentNode.removeChild(el);
+    };
+    el.appendChild(btn);
+  }
+
   container.appendChild(el);
   setTimeout(() => {
     if (el.parentNode) el.parentNode.removeChild(el);
-  }, 3600);
+  }, action ? 5500 : 3600);
 }
 
 export function openModal(innerHtml, onMount) {
@@ -82,12 +99,16 @@ export function openModal(innerHtml, onMount) {
   root.classList.remove("hidden");
   document.dispatchEvent(new CustomEvent("sv:modal-visibility", { detail: { open: true } }));
 
-  const closeOnBackdrop = (ev) => {
-    if (ev.target === root) {
+  let mousedownOnBackdrop = false;
+  root.onmousedown = (ev) => {
+    mousedownOnBackdrop = ev.target === root;
+  };
+  root.onclick = (ev) => {
+    if (mousedownOnBackdrop && ev.target === root) {
       closeModal();
     }
+    mousedownOnBackdrop = false;
   };
-  root.onclick = closeOnBackdrop;
   if (typeof onMount === "function") {
     onMount(root.querySelector(".modal-card"));
   }

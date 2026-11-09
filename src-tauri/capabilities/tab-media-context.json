@@ -1,10 +1,16 @@
 {
   "identifier": "tab-media-context",
   "description": "Minimal, nonce-guarded context menu bridge for external tab-* WebView2 instances.",
+  "local": true,
   "windows": ["main"],
   "webviews": ["tab-*"],
   "remote": {
-    "urls": ["http://*", "https://*"]
+    "urls": [
+      "http://*",
+      "https://*",
+      "http://*:*",
+      "https://*:*"
+    ]
   },
   "permissions": [
     "allow-tab-context-bridge"

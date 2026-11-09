@@ -1,9 +1,16 @@
 import { initBookmarksModule, refreshBookmarks, renderBookmarksPanel } from "./bookmarks.js";
 import {
+  closeBrowserFindBar,
   ensureBrowserTabsInitialized,
+  handleFindResultEvent,
   initBrowserModule,
+  openBookmarkCurrentTabModal,
+  openBrowserFindBar,
+  openMediaLinkPromptModal,
   renderActiveMediaToolbarPill,
   renderBrowserChrome,
+  renderGrabberToolbarBadge,
+  runBrowserFind,
   showMediaDetectedBanner,
   syncBrowserWebviewViewport,
 } from "./browser.js";
@@ -18,12 +25,17 @@ import { initHomeModule, renderHomePanel } from "./home.js";
 import { invokeCmd, listenEvent } from "./ipc.js";
 import {
   applyFullscreenDomState,
+  handleDroppedOrPickedLocalFiles,
+  handleMediaKeyCommand,
   handlePlayerKeyShortcut,
+  handlePlayerPlaybackEnded,
   initPlayerModule,
   initiateInAppPlayback,
   promptDirectMediaUrlModal,
+  promptOpenLocalMediaFiles,
   renderStreamCacheTelemetry,
   syncPlayerSurfaceViewport,
+  toggleFullscreen,
   updatePlayerState,
   wakeFullscreenHud,
 } from "./player.js";
@@ -46,23 +58,28 @@ function applyTheme(theme) {
   document.documentElement.setAttribute("data-theme", theme || "dark");
 }
 
+const VALID_VIEWS = [
+  "home",
+  "browser",
+  "player",
+  "recent",
+  "bookmarks",
+  "history",
+  "downloads",
+  "settings",
+];
+
 export function switchView(viewName) {
+  if (!VALID_VIEWS.includes(viewName)) return;
+  if (viewName !== "player" && store.playerState.fullscreen) {
+    toggleFullscreen(false);
+  }
   store.currentView = viewName;
   document.querySelectorAll("#sidebar .nav-item").forEach((btn) => {
     btn.classList.toggle("active", btn.getAttribute("data-view") === viewName);
   });
 
-  const views = [
-    "home",
-    "browser",
-    "player",
-    "recent",
-    "bookmarks",
-    "history",
-    "downloads",
-    "settings",
-  ];
-  views.forEach((v) => {
+  VALID_VIEWS.forEach((v) => {
     const el = document.getElementById(`view-${v}`);
     if (el) el.classList.toggle("hidden", v !== viewName);
   });
@@ -131,45 +148,53 @@ async function openInExternalPlayerFlow(url, title = null) {
         (card) => {
           card.querySelector("#ext-cancel").onclick = closeModal;
           card.querySelector("#ext-browse-custom").onclick = async () => {
-            const picked = await invokeCmd("external_player_browse_exe");
-            if (!picked) return;
-            await invokeCmd("external_player_add_custom", {
-              name: "",
-              executablePath: picked,
-            });
-            if (card.querySelector("#ext-make-default").checked) {
-              store.settings = await invokeCmd("settings_update_key", {
-                key: "default_external_player",
-                value: picked,
+            try {
+              const picked = await invokeCmd("external_player_browse_exe");
+              if (!picked) return;
+              await invokeCmd("external_player_add_custom", {
+                name: "",
+                executablePath: picked,
               });
-            }
-            closeModal();
-            await invokeCmd("open_media_external", {
-              url,
-              executablePath: picked,
-              customTitle: title,
-            });
-            refreshRecentMedia().catch(() => {});
-            showToast("Launched media in external player", "success");
-          };
-
-          card.querySelectorAll("[data-pick-exe]").forEach((btn) => {
-            btn.onclick = async () => {
-              const exe = btn.getAttribute("data-pick-exe");
               if (card.querySelector("#ext-make-default").checked) {
                 store.settings = await invokeCmd("settings_update_key", {
                   key: "default_external_player",
-                  value: exe,
+                  value: picked,
                 });
               }
               closeModal();
               await invokeCmd("open_media_external", {
                 url,
-                executablePath: exe,
+                executablePath: picked,
                 customTitle: title,
               });
               refreshRecentMedia().catch(() => {});
               showToast("Launched media in external player", "success");
+            } catch (err) {
+              showToast(String(err), "error");
+            }
+          };
+
+          card.querySelectorAll("[data-pick-exe]").forEach((btn) => {
+            btn.onclick = async () => {
+              try {
+                const exe = btn.getAttribute("data-pick-exe");
+                if (card.querySelector("#ext-make-default").checked) {
+                  store.settings = await invokeCmd("settings_update_key", {
+                    key: "default_external_player",
+                    value: exe,
+                  });
+                }
+                closeModal();
+                await invokeCmd("open_media_external", {
+                  url,
+                  executablePath: exe,
+                  customTitle: title,
+                });
+                refreshRecentMedia().catch(() => {});
+                showToast("Launched media in external player", "success");
+              } catch (err) {
+                showToast(String(err), "error");
+              }
             };
           });
         }
@@ -223,6 +248,7 @@ async function bootstrapApplication() {
   initHomeModule({
     onSwitchView: switchView,
     onPlayMedia: mediaActions.playInStreamVault,
+    onOpenLocalMedia: promptOpenLocalMediaFiles,
   });
   initBrowserModule({
     onSwitchView: switchView,
@@ -237,20 +263,46 @@ async function bootstrapApplication() {
   initRecentMediaModule(mediaActions);
   initBookmarksModule({ onSwitchView: switchView });
   initHistoryModule({ onSwitchView: switchView });
-  initSettingsModule({ onApplyTheme: applyTheme });
+  initSettingsModule({ onApplyTheme: applyTheme, onSwitchView: switchView });
 
   // Global keyboard shortcuts
   window.addEventListener("keydown", (ev) => {
+    if (store.modalOpen) {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        closeModal();
+      }
+      return;
+    }
+
     const tag = (ev.target?.tagName || "").toUpperCase();
     const inInput = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 
-    if (ev.ctrlKey && ev.code === "KeyT") {
+    if ((ev.ctrlKey || ev.metaKey) && ev.code === "KeyO") {
+      ev.preventDefault();
+      promptOpenLocalMediaFiles();
+      return;
+    }
+    if ((ev.ctrlKey || ev.metaKey) && ev.code === "KeyF") {
+      ev.preventDefault();
+      if (store.currentView !== "browser") {
+        switchView("browser");
+      }
+      openBrowserFindBar();
+      return;
+    }
+    if (ev.key === "Escape" && store.currentView === "browser" && store.findBarOpen) {
+      ev.preventDefault();
+      closeBrowserFindBar();
+      return;
+    }
+    if ((ev.ctrlKey || ev.metaKey) && ev.code === "KeyT") {
       ev.preventDefault();
       switchView("browser");
       invokeCmd("tab_create", { url: null, active: true }).catch(() => {});
       return;
     }
-    if (ev.ctrlKey && ev.code === "KeyL") {
+    if ((ev.ctrlKey || ev.metaKey) && ev.code === "KeyL") {
       ev.preventDefault();
       switchView("browser");
       const inp = document.getElementById("address-input");
@@ -258,7 +310,37 @@ async function bootstrapApplication() {
       inp?.select();
       return;
     }
-    if (!inInput && !store.modalOpen) {
+    if (store.currentView === "browser") {
+      if ((ev.ctrlKey || ev.metaKey) && ev.code === "KeyD") {
+        ev.preventDefault();
+        openBookmarkCurrentTabModal();
+        return;
+      }
+      if (((ev.ctrlKey || ev.metaKey) && ev.code === "KeyR") || ev.key === "F5") {
+        ev.preventDefault();
+        invokeCmd("tab_reload", { tabId: null }).catch(() => {});
+        return;
+      }
+      if ((ev.ctrlKey || ev.metaKey) && ev.code === "KeyW") {
+        ev.preventDefault();
+        const activeTab = (store.tabs || []).find((t) => t.is_active);
+        if (activeTab) {
+          invokeCmd("tab_close", { tabId: activeTab.id }).catch(() => {});
+        }
+        return;
+      }
+      if (!inInput && ev.altKey && ev.key === "ArrowLeft") {
+        ev.preventDefault();
+        invokeCmd("tab_go_back", { tabId: null }).catch(() => {});
+        return;
+      }
+      if (!inInput && ev.altKey && ev.key === "ArrowRight") {
+        ev.preventDefault();
+        invokeCmd("tab_go_forward", { tabId: null }).catch(() => {});
+        return;
+      }
+    }
+    if (!inInput) {
       if (handlePlayerKeyShortcut(ev.code)) {
         ev.preventDefault();
       }
@@ -266,13 +348,28 @@ async function bootstrapApplication() {
   });
 
   // Subscribe to real-time backend Tauri events
+  let lastActiveTabId = null;
   await listenEvent("sv://tabs-updated", (tabs) => {
     store.tabs = tabs || [];
     renderBrowserChrome();
+    const curActive = store.tabs.find((t) => t.is_active);
+    if (curActive && curActive.id !== lastActiveTabId) {
+      lastActiveTabId = curActive.id;
+      if (store.findBarOpen) {
+        runBrowserFind({ forward: true, stayOnCurrent: true }).catch(() => {});
+      }
+    }
   });
 
   await listenEvent("sv://media-detected", (payload) => {
     showMediaDetectedBanner(payload);
+  });
+
+  await listenEvent("sv://media-link-prompt", (payload) => {
+    if (store.currentView !== "browser") {
+      switchView("browser");
+    }
+    openMediaLinkPromptModal(payload);
   });
 
   await listenEvent("sv://non-media-download-requested", (payload) => {
@@ -301,9 +398,45 @@ async function bootstrapApplication() {
     updatePlayerState(snap);
   });
 
-  await listenEvent("sv://player-ended", () => {
+  await listenEvent("sv://player-ended", (payload) => {
     refreshRecentMedia().catch(() => {});
-    showToast("Media playback finished", "info");
+    handlePlayerPlaybackEnded(payload).catch(() => {});
+  });
+
+  await listenEvent("sv://page-media-catalog", (catalog) => {
+    if (catalog && catalog.tab_id) {
+      store.pageMediaByTab[catalog.tab_id] = catalog;
+      renderGrabberToolbarBadge();
+    }
+  });
+
+  await listenEvent("sv://find-result", (res) => {
+    handleFindResultEvent(res);
+  });
+
+  await listenEvent("sv://open-find-bar", () => {
+    if (store.currentView !== "browser") {
+      switchView("browser");
+    }
+    openBrowserFindBar();
+  });
+
+  await listenEvent("sv://media-key-command", (action) => {
+    handleMediaKeyCommand(action).catch(() => {});
+  });
+
+  await listenEvent("sv://file-drop-hover", (hovering) => {
+    document
+      .getElementById("global-drop-overlay")
+      ?.classList.toggle("hidden", !hovering);
+  });
+
+  await listenEvent("sv://files-dropped", (payload) => {
+    document.getElementById("global-drop-overlay")?.classList.add("hidden");
+    handleDroppedOrPickedLocalFiles(
+      payload?.media_paths || [],
+      payload?.subtitle_paths || []
+    ).catch(() => {});
   });
 
   await listenEvent("sv://stream-telemetry", (payload) => {
@@ -364,9 +497,16 @@ async function bootstrapApplication() {
       0x1b: "Escape",
       0xdb: "BracketLeft",
       0xdd: "BracketRight",
+      0x5a: "KeyZ",
+      0x58: "KeyX",
+      0x53: "KeyS",
+      0x4e: "KeyN",
+      0x50: "KeyP",
+      0x21: "PageUp",
+      0x22: "PageDown",
     };
     const mapped = vkMap[vkCode];
-    if (mapped) handlePlayerKeyShortcut(mapped);
+    if (mapped) handlePlayerKeyShortcut(mapped, true);
   });
 
   await listenEvent("sv://toast", (t) => {

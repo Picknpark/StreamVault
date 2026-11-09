@@ -1,5 +1,5 @@
 ================================================================================
-  StreamVault v1.0.0 — Portable 64-bit Windows Browser & Media Streaming Player
+  StreamVault v1.1.0 — Portable 64-bit Windows Browser & Media Streaming Player
 ================================================================================
 
 1. QUICK START (ZERO INSTALLATION REQUIRED)
@@ -35,7 +35,9 @@ StreamVault stores 100% of its persistent state inside its own `data\` folder:
       downloads\                          Default PERMANENT downloads directory
       logs\
         streamvault.log                   Rotating structured diagnostic logs
-      backups\                            Automatic SQLite database backups
+      backups\
+        streamvault.backup.db             Single rolling SQLite backup (overridden
+                                          atomically on each checkpoint/update)
       webview2\                           Self-contained WebView2 browser profile
     runtime\
       media-engine\
@@ -78,15 +80,23 @@ C. Progressive Streaming vs. Permanent Downloads:
      spaces, brackets, parentheses, and Unicode) and saves permanently to your
      chosen folder with Pause / Resume / Retry / Show in Folder support.
 
-4. BUILT-IN PLAYER KEYBOARD & MOUSE CONTROLS
---------------------------------------------
+4. BUILT-IN PLAYER & BROWSER KEYBOARD / HARDWARE CONTROLS
+---------------------------------------------------------
   Space                 Play / Pause
   Left / Right Arrow    Seek backward / forward (default 10s, configurable)
   Up / Down Arrow       Volume up / down
   M                     Mute / Unmute
   F                     Toggle Fullscreen
-  Esc                   Exit Fullscreen
+  Esc                   Exit Fullscreen / Close Find Bar
   [ / ]                 Decrease / Increase Playback Speed (0.25x – 4.0x)
+  Z / X                 Subtitle Sync Offset -100 ms / +100 ms
+  S                     Capture Video Frame Screenshot (.png in Screenshots\)
+  N / P                 Next / Previous Episode in Playlist Queue
+  PageDown / PageUp     Next / Previous MKV Chapter
+  Ctrl + O              Open Local Video / Audio / Subtitle Files (or Drag & Drop)
+  Ctrl + F              Find in Webpage (CSS Custom Highlight, non-destructive)
+  Middle-Click / Ctrl+Click  Open Webpage Link or Bookmark in Background Tab
+  Hardware Media Keys   Play/Pause, Next, Previous, Stop (Windows SMTC Flyout)
   Single Click Video    Play / Pause
   Double Click Video    Toggle Fullscreen
   Mouse Wheel on Video  Adjust Volume

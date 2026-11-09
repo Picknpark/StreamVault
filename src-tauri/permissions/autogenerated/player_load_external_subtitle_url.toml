@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-player-load-external-subtitle-url"
+description = "Enables the player_load_external_subtitle_url command without any pre-configured scope."
+commands.allow = ["player_load_external_subtitle_url"]
+
+[[permission]]
+identifier = "deny-player-load-external-subtitle-url"
+description = "Denies the player_load_external_subtitle_url command without any pre-configured scope."
+commands.deny = ["player_load_external_subtitle_url"]

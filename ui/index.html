@@ -96,6 +96,9 @@
                 autocomplete="off"
               />
               <button type="submit" class="btn btn-primary">Open</button>
+              <button type="button" id="btn-home-open-local" class="btn" title="Open Local Video / Audio File (Ctrl+O)">
+                📂 Local File
+              </button>
             </form>
           </div>
 
@@ -160,6 +163,10 @@
           </div>
 
           <button id="btn-bookmark-star" class="icon-btn star-btn" title="Bookmark Current Page (Ctrl+D)">☆</button>
+          <button id="btn-browser-find" class="icon-btn" title="Find in Page (Ctrl+F)">🔍</button>
+          <button id="btn-browser-grab-media" class="btn btn-sm grab-toolbar-btn" title="Batch Media Grabber — Download or Play Selected Media on Page">
+            ⬇ Grab <span id="grab-media-count-badge" class="grab-count-pill hidden">0</span>
+          </button>
           <button id="btn-inspect-url-media" class="icon-btn" title="Play or Download URL as Media">🎬</button>
           <button id="btn-browser-menu" class="icon-btn" title="Browser Menu">⋮</button>
           <div id="browser-loading-line" class="nav-progress-line hidden"></div>
@@ -167,6 +174,22 @@
 
         <!-- Bookmark Bar -->
         <div id="browser-bookmark-bar" class="bookmark-bar"></div>
+
+        <!-- Find-in-Page Bar (Ctrl+F) -->
+        <div id="browser-find-bar" class="browser-find-bar hidden">
+          <span class="find-bar-icon">🔍</span>
+          <input
+            id="browser-find-input"
+            type="text"
+            placeholder="Find in page…"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <span id="browser-find-count" class="find-bar-count">0 / 0</span>
+          <button type="button" id="btn-find-prev" class="icon-btn" title="Previous Match (Shift+Enter)">▲</button>
+          <button type="button" id="btn-find-next" class="icon-btn" title="Next Match (Enter)">▼</button>
+          <button type="button" id="btn-find-close" class="icon-btn" title="Close Find Bar (Esc)">✕</button>
+        </div>
 
         <!-- Detected Media Action Bar -->
         <div id="media-detected-banner" class="media-detected-bar hidden">
@@ -200,9 +223,13 @@
               ← Browser
             </button>
             <span id="player-title-text" class="player-media-title">No Media Loaded</span>
+            <button type="button" id="player-queue-pill" class="player-queue-pill hidden" title="Open Episode / Playlist Queue">
+              Ep 1 / 1
+            </button>
           </div>
           <div class="transport-right">
             <span id="player-cache-pill" class="stream-cache-pill hidden">Cache: 0%</span>
+            <button id="btn-player-open-local" class="player-btn" title="Open Local Video / Audio File (Ctrl+O)">📂 Open File</button>
             <button id="btn-player-open-url-prompt" class="player-btn" title="Open Direct Stream URL">🔗 Open URL</button>
             <button id="btn-player-handoff-ext" class="player-btn" title="Open Current Media in External Player">↗ External</button>
             <button id="btn-player-save-perm" class="player-btn" title="Download Media Permanently (Save As)">⬇ Save File</button>
@@ -232,22 +259,26 @@
         <div class="player-transport-bar">
           <div class="timeline-row">
             <span id="player-time-current" class="time-readout">00:00</span>
-            <div id="player-timeline" class="timeline-track">
-              <div class="timeline-rail">
-                <div id="player-buffer-layer" class="timeline-buffer-layer"></div>
-                <div id="player-timeline-played" class="timeline-played"></div>
+              <div id="player-timeline" class="timeline-track">
+                <div class="timeline-rail">
+                  <div id="player-buffer-layer" class="timeline-buffer-layer"></div>
+                  <div id="player-timeline-played" class="timeline-played"></div>
+                  <div id="player-chapter-layer" class="timeline-chapter-layer"></div>
+                </div>
+                <div id="player-timeline-tip" class="timeline-hover-tip hidden">00:00</div>
               </div>
-              <div id="player-timeline-tip" class="timeline-hover-tip hidden">00:00</div>
-            </div>
             <span id="player-time-total" class="time-readout right">00:00</span>
           </div>
 
           <div class="transport-controls-row">
             <div class="transport-left">
+              <button id="btn-player-prev" class="player-btn" title="Previous Episode / Item (P)" disabled>⏮</button>
               <button id="btn-player-play" class="player-btn primary" title="Play / Pause (Space)">▶ Play</button>
+              <button id="btn-player-next" class="player-btn" title="Next Episode / Item (N)" disabled>⏭</button>
               <button id="btn-player-stop" class="player-btn" title="Stop">■</button>
               <button id="btn-player-seek-back" class="player-btn" title="Seek Backward (Left Arrow)">⟲ 10s</button>
               <button id="btn-player-seek-fwd" class="player-btn" title="Seek Forward (Right Arrow)">10s ⟳</button>
+              <button id="btn-player-queue" class="player-btn" title="Episode / Playlist Queue">☰ Queue</button>
 
               <div class="volume-group">
                 <button id="btn-player-mute" class="player-btn" title="Mute / Unmute (M)">🔊</button>
@@ -277,7 +308,11 @@
               <select id="player-sub-select" class="player-select" title="Subtitles">
                 <option value="off">Subtitles: Off</option>
               </select>
-              <button id="btn-player-load-sub" class="player-btn" title="Load External Subtitle (.srt / .ass)">+Sub</button>
+              <button id="btn-player-load-sub" class="player-btn" title="Load External Subtitle (.srt / .ass / .vtt)">+Sub</button>
+
+              <button id="btn-player-sync-fx" class="player-btn" title="Subtitle & Audio Sync Offset (Z / X) + Subtitle Size">⏱ Sync</button>
+              <button id="btn-player-dialogue-boost" class="player-btn" title="Night / Dialogue Boost Audio Filter (dynaudnorm)">🌙 Boost</button>
+              <button id="btn-player-screenshot" class="player-btn" title="Capture Video Frame Screenshot (S)">📷</button>
 
               <select id="player-aspect-select" class="player-select" title="Aspect Ratio">
                 <option value="auto">Aspect: Auto</option>
@@ -405,6 +440,19 @@
         </div>
       </section>
     </main>
+  </div>
+
+  <!-- Global Drag-and-Drop Overlay -->
+  <div id="global-drop-overlay" class="global-drop-overlay hidden">
+    <div class="global-drop-card">
+      <div style="font-size:32px;">🎬</div>
+      <div style="font-size:16px;font-weight:700;color:#f8fafc;">
+        Drop Local Video, Audio, or Subtitle Files
+      </div>
+      <div style="font-size:12.5px;color:#94a3b8;">
+        Videos &amp; audio play directly via hardware-accelerated libmpv • .srt / .ass / .vtt attach live to active video
+      </div>
+    </div>
   </div>
 
   <!-- Global Modal Host (Resume Dialog, External Player Picker, Bookmark Editor, Browser Menu) -->

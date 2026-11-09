@@ -1,5 +1,6 @@
-use crate::browser_tabs::{BrowserTabInfo, BrowserTabManager, ViewportBounds};
+use crate::browser_tabs::{BrowserTabInfo, BrowserTabManager, PageMediaCatalog, ViewportBounds};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use streamvault_core::db::bookmarks::{Bookmark, BookmarkFolder, BookmarkTree};
 use streamvault_core::db::downloads::DownloadRecord;
 use streamvault_core::db::history::{AddressSuggestion, HistoryEntry};
@@ -18,7 +19,7 @@ use streamvault_core::media_detect::{
 use streamvault_core::mpv_engine::PlayerStateSnapshot;
 use streamvault_core::portable::DependencyStatus;
 use streamvault_core::stream_cache::{CacheCleanupReport, CacheSummary, StreamCacheStatus};
-use streamvault_core::{ActiveMediaHighlight, StreamVaultCore};
+use streamvault_core::{ActiveMediaHighlight, ReleaseUpdateCheckResult, StreamVaultCore};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Clone)]
@@ -55,9 +56,28 @@ pub struct PlaybackPreparationResponse {
     pub stream_status: Option<StreamCacheStatus>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScreenshotCaptureResponse {
+    pub path: String,
+    pub filename: String,
+    pub native_overlay_shown: bool,
+}
+
 // ---------------------------------------------------------------------------
 // 1. Bootstrap & Diagnostics
 // ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn app_check_github_update(
+    state: State<'_, AppState>,
+    repo_slug_override: Option<String>,
+) -> CmdResult<ReleaseUpdateCheckResult> {
+    state
+        .core
+        .check_github_release_update(repo_slug_override)
+        .await
+        .map_err(err_str)
+}
 
 #[tauri::command]
 pub async fn app_bootstrap_state(
@@ -282,8 +302,75 @@ pub async fn suggest_address_bar(
         .map_err(err_str)
 }
 
+#[tauri::command]
+pub async fn tab_get_page_media(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    tab_id: Option<String>,
+) -> CmdResult<Option<PageMediaCatalog>> {
+    if let Some(existing) = state.tabs.get_page_media_catalog(tab_id.as_deref()) {
+        if !existing.items.is_empty() {
+            return Ok(Some(existing));
+        }
+    }
+    state
+        .tabs
+        .scan_page_media_live(&app, tab_id.as_deref())
+        .await
+        .map_err(err_str)
+}
+
+#[tauri::command]
+pub async fn tab_request_page_media(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    tab_id: Option<String>,
+) -> CmdResult<Option<PageMediaCatalog>> {
+    state
+        .tabs
+        .scan_page_media_live(&app, tab_id.as_deref())
+        .await
+        .map_err(err_str)
+}
+
+#[tauri::command]
+pub async fn tab_find_in_page(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    tab_id: Option<String>,
+    query: String,
+    forward: Option<bool>,
+    clear: Option<bool>,
+    stay_on_current: Option<bool>,
+) -> CmdResult<serde_json::Value> {
+    state
+        .tabs
+        .find_in_page_live(
+            &app,
+            tab_id.as_deref(),
+            &query,
+            forward.unwrap_or(true),
+            clear.unwrap_or(false),
+            stay_on_current.unwrap_or(false),
+        )
+        .await
+        .map_err(err_str)
+}
+
+#[tauri::command]
+pub async fn tab_scroll_to_active_media(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    tab_id: Option<String>,
+) -> CmdResult<bool> {
+    Ok(state
+        .tabs
+        .scroll_to_active_media(&app, tab_id.as_deref())
+        .await)
+}
+
 /// Narrow, nonce-authenticated bridge called ONLY by the closure-isolated content script
-/// inside `tab-*` WebView2 instances when the user clicks an item in the right-click media menu.
+/// inside `tab-*` WebView2 instances.
 #[tauri::command]
 pub async fn tab_context_bridge(
     app: AppHandle,
@@ -293,10 +380,42 @@ pub async fn tab_context_bridge(
     action: String,
     url: String,
     title: String,
+    payload: Option<String>,
 ) -> CmdResult<()> {
     if !state.tabs.verify_nonce(&token) {
         return Err("Unauthorized tab context bridge invocation".to_string());
     }
+
+    match action.as_str() {
+        "page_media_catalog" => {
+            if let Some(raw_json) = payload {
+                if let Ok(catalog) = serde_json::from_str::<PageMediaCatalog>(&raw_json) {
+                    state.tabs.store_page_media_catalog(&app, &tab_id, catalog);
+                }
+            }
+            return Ok(());
+        }
+        "find_result" => {
+            if let Some(raw_json) = payload {
+                if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&raw_json) {
+                    if let Some(obj) = val.as_object_mut() {
+                        obj.insert("tab_id".to_string(), serde_json::json!(tab_id));
+                    }
+                    let _ = app.emit("sv://find-result", val);
+                }
+            }
+            return Ok(());
+        }
+        "open_find_bar" => {
+            let _ = app.emit(
+                "sv://open-find-bar",
+                serde_json::json!({ "tab_id": tab_id }),
+            );
+            return Ok(());
+        }
+        _ => {}
+    }
+
     let clean_url = preserve_or_sanitize_http_url(&url).map_err(err_str)?;
 
     match action.as_str() {
@@ -309,6 +428,21 @@ pub async fn tab_context_bridge(
             })
             .await
             .map_err(err_str)??;
+        }
+        "open_background_tab" => {
+            let tabs = state.tabs.clone();
+            let app_bg = app.clone();
+            let title_opt = (!title.trim().is_empty()).then(|| title.clone());
+            tokio::task::spawn_blocking(move || {
+                tabs.create_tab_allowing_media(&app_bg, &clean_url, title_opt.as_deref(), false)
+                    .map_err(err_str)
+            })
+            .await
+            .map_err(err_str)??;
+            let _ = app.emit(
+                "sv://toast",
+                serde_json::json!({ "message": "Opened link in background tab", "kind": "info" }),
+            );
         }
         "play_in_app" => {
             let _ = app.emit(
@@ -342,6 +476,36 @@ pub async fn tab_context_bridge(
                     "tab_id": tab_id
                 }),
             );
+        }
+        "dblclick_media_prompt" => {
+            let _ = app.emit(
+                "sv://media-link-prompt",
+                serde_json::json!({
+                    "url": clean_url,
+                    "title": title,
+                    "tab_id": tab_id
+                }),
+            );
+        }
+        "single_click_media" => {
+            let auto_detect = state
+                .core
+                .db
+                .get_settings()
+                .map(|s| s.auto_detect_media)
+                .unwrap_or(true);
+            if auto_detect {
+                state.tabs.dispatch_media_detected(app, tab_id, clean_url);
+            } else {
+                let tabs = state.tabs.clone();
+                let tid = tab_id.clone();
+                let u = clean_url.clone();
+                tokio::task::spawn_blocking(move || {
+                    tabs.navigate_tab(&app, Some(&tid), &u).map_err(err_str)
+                })
+                .await
+                .map_err(err_str)??;
+            }
         }
         "probe_and_inspect" => {
             state.tabs.dispatch_media_detected(app, tab_id, clean_url);
@@ -521,8 +685,6 @@ async fn execute_in_app_playback(
         )
         .map_err(err_str)?;
 
-    let _ = state.core.player.set_volume(settings.default_volume);
-
     state
         .core
         .set_active_media_highlight(Some(clean_url), Some("in_app"), Some(&display_title));
@@ -545,7 +707,25 @@ pub async fn open_media_external(
     executable_path: Option<String>,
     custom_title: Option<String>,
 ) -> CmdResult<serde_json::Value> {
-    let clean_url = preserve_or_sanitize_http_url(&url).map_err(err_str)?;
+    let trimmed = url.trim();
+    let (launch_target, highlight_key) =
+        if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+            let clean = preserve_or_sanitize_http_url(trimmed).map_err(err_str)?;
+            (clean.clone(), clean)
+        } else {
+            let raw_local = trimmed.strip_prefix("local://").unwrap_or(trimmed).trim();
+            let native_path =
+                streamvault_core::portable::normalize_native_path(PathBuf::from(raw_local));
+            if raw_local.is_empty() || raw_local.starts_with('-') || !native_path.is_file() {
+                return Err(format!(
+                    "Invalid media URL or local file not found: {trimmed}"
+                ));
+            }
+            let native_str = native_path.to_string_lossy().to_string();
+            let local_uri = format!("local://{}", native_str.replace('\\', "/"));
+            (native_str, local_uri)
+        };
+
     let chosen_exe = match executable_path.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
         Some(exe) => exe,
         None => {
@@ -557,7 +737,7 @@ pub async fn open_media_external(
                 return Ok(serde_json::json!({
                     "needs_player_selection": true,
                     "players": players,
-                    "url": clean_url
+                    "url": launch_target
                 }));
             }
             settings.default_external_player
@@ -568,20 +748,20 @@ pub async fn open_media_external(
         .as_deref()
         .filter(|s| !s.trim().is_empty())
         .map(|s| s.to_string())
-        .unwrap_or_else(|| extract_display_title_from_url(&clean_url));
+        .unwrap_or_else(|| extract_display_title_from_url(&highlight_key));
 
     launch_in_external_player(
         &state.core.db,
         &state.core.logger,
         &chosen_exe,
-        &clean_url,
+        &launch_target,
         Some(&title),
     )
     .map_err(err_str)?;
 
     state
         .core
-        .set_active_media_highlight(Some(&clean_url), Some("external"), Some(&title));
+        .set_active_media_highlight(Some(&highlight_key), Some("external"), Some(&title));
     state.tabs.broadcast_active_media_highlight(&app);
 
     Ok(serde_json::json!({
@@ -601,20 +781,29 @@ pub async fn player_get_state(state: State<'_, AppState>) -> CmdResult<PlayerSta
 }
 
 #[tauri::command]
-pub async fn player_toggle_pause(state: State<'_, AppState>) -> CmdResult<PlayerStateSnapshot> {
+pub async fn player_toggle_pause(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<PlayerStateSnapshot> {
     let snap = state.core.player.toggle_pause().map_err(err_str)?;
     if snap.paused {
         persist_snapshot_position(&state.core, &snap);
     }
+    state.tabs.broadcast_active_media_highlight(&app);
     Ok(snap)
 }
 
 #[tauri::command]
-pub async fn player_set_pause(state: State<'_, AppState>, paused: bool) -> CmdResult<PlayerStateSnapshot> {
+pub async fn player_set_pause(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    paused: bool,
+) -> CmdResult<PlayerStateSnapshot> {
     let snap = state.core.player.set_pause(paused).map_err(err_str)?;
     if snap.paused {
         persist_snapshot_position(&state.core, &snap);
     }
+    state.tabs.broadcast_active_media_highlight(&app);
     Ok(snap)
 }
 
@@ -660,7 +849,12 @@ pub async fn player_set_volume(
     state: State<'_, AppState>,
     volume: i64,
 ) -> CmdResult<PlayerStateSnapshot> {
-    state.core.player.set_volume(volume).map_err(err_str)
+    let snap = state.core.player.set_volume(volume).map_err(err_str)?;
+    let _ = state
+        .core
+        .db
+        .update_single_setting("default_volume", serde_json::json!(snap.volume));
+    Ok(snap)
 }
 
 #[tauri::command]
@@ -800,6 +994,262 @@ pub async fn player_set_time_tooltip(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn player_open_local_file(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    file_path: String,
+    start_position_ms: Option<i64>,
+) -> CmdResult<PlayerStateSnapshot> {
+    let raw_trimmed = file_path
+        .trim()
+        .strip_prefix("local://")
+        .unwrap_or(file_path.trim())
+        .trim();
+    let path = streamvault_core::portable::normalize_native_path(PathBuf::from(raw_trimmed));
+    if !path.is_file() {
+        return Err(format!("Local file does not exist: {}", path.display()));
+    }
+
+    let prev = state.core.player.snapshot();
+    if prev.active {
+        persist_snapshot_position(&state.core, &prev);
+    }
+    state.core.stream_cache.stop_active_session();
+
+    let settings = state.core.db.get_settings().map_err(err_str)?;
+    let title = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "Local Media".to_string());
+    let local_uri_key = format!("local://{}", path.to_string_lossy().replace('\\', "/"));
+
+    if start_position_ms == Some(0) {
+        let _ = state.core.db.reset_playback_position(&local_uri_key);
+    }
+
+    let resume_ms = match start_position_ms {
+        Some(ms) => Some(ms),
+        None => state
+            .core
+            .db
+            .get_playback_position(&local_uri_key)
+            .ok()
+            .flatten()
+            .filter(|p| p.should_offer_resume && settings.resume_playback_behavior != "always_beginning")
+            .map(|p| p.position_ms),
+    };
+
+    let _ = state.core.db.record_recent_media_open(
+        &local_uri_key,
+        Some(&title),
+        None,
+        "in_app",
+    );
+
+    let snap = state
+        .core
+        .player
+        .load_local_file(
+            &path,
+            &title,
+            resume_ms,
+            Some(settings.default_playback_speed),
+            settings.auto_load_matching_subtitle,
+        )
+        .map_err(err_str)?;
+
+    state
+        .core
+        .set_active_media_highlight(Some(&local_uri_key), Some("in_app"), Some(&title));
+    state.tabs.broadcast_active_media_highlight(&app);
+
+    Ok(snap)
+}
+
+#[tauri::command]
+pub async fn player_browse_and_open_local_media() -> CmdResult<Vec<String>> {
+    #[cfg(windows)]
+    {
+        let mut media_exts: Vec<&str> = Vec::new();
+        media_exts.extend_from_slice(streamvault_core::media_detect::VIDEO_EXTENSIONS);
+        media_exts.extend_from_slice(streamvault_core::media_detect::AUDIO_EXTENSIONS);
+
+        let picked = rfd::AsyncFileDialog::new()
+            .set_title("Open Local Video / Audio Files — StreamVault")
+            .add_filter("Media Files", &media_exts)
+            .add_filter("Subtitle Files", streamvault_core::media_detect::SUBTITLE_EXTENSIONS)
+            .add_filter("All Files", &["*"])
+            .pick_files()
+            .await;
+
+        let Some(files) = picked else {
+            return Ok(Vec::new());
+        };
+        return Ok(files
+            .into_iter()
+            .map(|f| f.path().to_string_lossy().to_string())
+            .collect());
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(Vec::new())
+    }
+}
+
+#[tauri::command]
+pub async fn player_load_external_subtitle_path(
+    state: State<'_, AppState>,
+    file_path: String,
+) -> CmdResult<PlayerStateSnapshot> {
+    let p = PathBuf::from(file_path.trim());
+    state
+        .core
+        .player
+        .add_external_subtitle_file(&p)
+        .map_err(err_str)
+}
+
+#[tauri::command]
+pub async fn player_load_external_subtitle_url(
+    state: State<'_, AppState>,
+    subtitle_url: String,
+    select: Option<bool>,
+) -> CmdResult<PlayerStateSnapshot> {
+    let clean = preserve_or_sanitize_http_url(&subtitle_url).map_err(err_str)?;
+    state
+        .core
+        .player
+        .add_external_subtitle_url(&clean, select.unwrap_or(true))
+        .map_err(err_str)
+}
+
+#[tauri::command]
+pub async fn player_set_sub_delay(
+    state: State<'_, AppState>,
+    delay_ms: i64,
+) -> CmdResult<PlayerStateSnapshot> {
+    state
+        .core
+        .player
+        .set_sub_delay_ms(delay_ms)
+        .map_err(err_str)
+}
+
+#[tauri::command]
+pub async fn player_set_audio_delay(
+    state: State<'_, AppState>,
+    delay_ms: i64,
+) -> CmdResult<PlayerStateSnapshot> {
+    state
+        .core
+        .player
+        .set_audio_delay_ms(delay_ms)
+        .map_err(err_str)
+}
+
+#[tauri::command]
+pub async fn player_set_sub_scale(
+    state: State<'_, AppState>,
+    scale: f64,
+) -> CmdResult<PlayerStateSnapshot> {
+    state.core.player.set_sub_scale(scale).map_err(err_str)
+}
+
+#[tauri::command]
+pub async fn player_set_dialogue_boost(
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> CmdResult<PlayerStateSnapshot> {
+    state
+        .core
+        .player
+        .set_dialogue_boost(enabled)
+        .map_err(err_str)
+}
+
+#[tauri::command]
+pub async fn player_take_screenshot(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    include_subtitles: Option<bool>,
+) -> CmdResult<ScreenshotCaptureResponse> {
+    let settings = state.core.db.get_settings().map_err(err_str)?;
+    let base_dl = state
+        .core
+        .paths
+        .resolve_portable_path(&settings.default_download_dir);
+    let screenshots_dir = base_dl.join("Screenshots");
+    let include_subs = include_subtitles.unwrap_or(true);
+    let player = state.core.player.clone();
+    let saved_path = tokio::task::spawn_blocking(move || {
+        player
+            .take_screenshot_to_dir(&screenshots_dir, include_subs)
+            .map_err(err_str)
+    })
+    .await
+    .map_err(err_str)??;
+
+    let filename = saved_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "screenshot.png".to_string());
+
+    let scale_factor = app
+        .get_window("main")
+        .and_then(|w| w.scale_factor().ok())
+        .unwrap_or(1.0);
+    let player_for_ui = state.core.player.clone();
+    let fname_for_ui = filename.clone();
+    let path_for_ui = saved_path.clone();
+    let fallback_dir = state.core.paths.downloads_dir.clone();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let native_overlay_shown = if app
+        .run_on_main_thread(move || {
+            let shown = player_for_ui.show_screenshot_toast(
+                &fname_for_ui,
+                &path_for_ui,
+                &fallback_dir,
+                scale_factor,
+            );
+            let _ = tx.send(shown);
+        })
+        .is_ok()
+    {
+        rx.await.unwrap_or(false)
+    } else {
+        false
+    };
+
+    Ok(ScreenshotCaptureResponse {
+        path: saved_path.to_string_lossy().to_string(),
+        filename,
+        native_overlay_shown,
+    })
+}
+
+#[tauri::command]
+pub async fn player_reveal_path(state: State<'_, AppState>, path: String) -> CmdResult<()> {
+    let target = PathBuf::from(path.trim());
+    let fallback_dir = state.core.paths.downloads_dir.clone();
+    tokio::task::spawn_blocking(move || {
+        streamvault_core::downloader::reveal_in_file_manager(&target, None, &fallback_dir)
+            .map_err(err_str)
+    })
+    .await
+    .map_err(err_str)?
+}
+
+#[tauri::command]
+pub async fn player_sync_smtc(
+    state: State<'_, AppState>,
+    has_prev: bool,
+    has_next: bool,
+) -> CmdResult<()> {
+    state.core.player.sync_smtc(has_prev, has_next);
+    Ok(())
+}
+
 pub fn persist_snapshot_position(core: &StreamVaultCore, snap: &PlayerStateSnapshot) {
     if let Some(ref url) = snap.original_url {
         if snap.position_ms > 0 || snap.duration_ms > 0 {
@@ -842,6 +1292,50 @@ pub async fn stream_cache_clear(state: State<'_, AppState>) -> CmdResult<CacheCl
 // ---------------------------------------------------------------------------
 // 6. Permanent Media Download Manager
 // ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn download_pick_batch_folder(
+    state: State<'_, AppState>,
+) -> CmdResult<Option<String>> {
+    #[cfg(windows)]
+    {
+        let settings = state.core.db.get_settings().map_err(err_str)?;
+        let start_dir = state
+            .core
+            .paths
+            .resolve_portable_path(&settings.default_download_dir);
+        let picked = rfd::AsyncFileDialog::new()
+            .set_title("Choose Destination Folder for Batch Download — StreamVault")
+            .set_directory(start_dir)
+            .pick_folder()
+            .await;
+        return Ok(picked.map(|f| state.core.paths.to_portable_string(f.path())));
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = state;
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+pub async fn download_start_batch(
+    state: State<'_, AppState>,
+    urls: Vec<String>,
+    destination_dir: Option<String>,
+) -> CmdResult<Vec<DownloadRecord>> {
+    let resolved_dir = destination_dir
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| state.core.paths.resolve_portable_path(&s));
+    let downloader = state.core.downloader.clone();
+    tokio::task::spawn_blocking(move || {
+        downloader
+            .enqueue_batch_downloads(urls, resolved_dir)
+            .map_err(err_str)
+    })
+    .await
+    .map_err(err_str)?
+}
 
 #[tauri::command]
 pub async fn download_prepare_save_as(
@@ -985,13 +1479,24 @@ pub async fn recent_media_list(
 }
 
 #[tauri::command]
-pub async fn recent_media_remove(state: State<'_, AppState>, id: i64) -> CmdResult<()> {
-    state.core.db.remove_recent_media(id).map_err(err_str)
+pub async fn recent_media_remove(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+) -> CmdResult<()> {
+    state.core.db.remove_recent_media(id).map_err(err_str)?;
+    state.tabs.broadcast_active_media_highlight(&app);
+    Ok(())
 }
 
 #[tauri::command]
-pub async fn recent_media_clear(state: State<'_, AppState>) -> CmdResult<usize> {
-    state.core.db.clear_recent_media().map_err(err_str)
+pub async fn recent_media_clear(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<usize> {
+    let n = state.core.db.clear_recent_media().map_err(err_str)?;
+    state.tabs.broadcast_active_media_highlight(&app);
+    Ok(n)
 }
 
 #[tauri::command]
@@ -1003,21 +1508,32 @@ pub async fn playback_position_get(
 }
 
 #[tauri::command]
-pub async fn playback_position_reset(state: State<'_, AppState>, url: String) -> CmdResult<()> {
+pub async fn playback_position_reset(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    url: String,
+) -> CmdResult<()> {
     state
         .core
         .db
         .reset_playback_position(&url)
-        .map_err(err_str)
+        .map_err(err_str)?;
+    state.tabs.broadcast_active_media_highlight(&app);
+    Ok(())
 }
 
 #[tauri::command]
-pub async fn playback_position_clear_all(state: State<'_, AppState>) -> CmdResult<usize> {
-    state
+pub async fn playback_position_clear_all(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<usize> {
+    let n = state
         .core
         .db
         .clear_all_playback_positions()
-        .map_err(err_str)
+        .map_err(err_str)?;
+    state.tabs.broadcast_active_media_highlight(&app);
+    Ok(n)
 }
 
 // ---------------------------------------------------------------------------
@@ -1279,7 +1795,10 @@ pub async fn settings_browse_download_dir(
 }
 
 #[tauri::command]
-pub async fn privacy_clear_all_data(state: State<'_, AppState>) -> CmdResult<serde_json::Value> {
+pub async fn privacy_clear_all_data(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<serde_json::Value> {
     let hist = state.core.db.clear_history_period("all").map_err(err_str)?;
     let recent = state.core.db.clear_recent_media().map_err(err_str)?;
     let pos = state
@@ -1292,6 +1811,7 @@ pub async fn privacy_clear_all_data(state: State<'_, AppState>) -> CmdResult<ser
         .stream_cache
         .clear_inactive_cache()
         .map_err(err_str)?;
+    state.tabs.broadcast_active_media_highlight(&app);
     Ok(serde_json::json!({
         "cleared_history": hist,
         "cleared_recent_media": recent,

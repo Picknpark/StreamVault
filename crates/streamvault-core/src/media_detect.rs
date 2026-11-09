@@ -6,13 +6,20 @@ use std::time::Duration;
 use url::Url;
 
 pub const VIDEO_EXTENSIONS: &[&str] = &[
-    "mkv", "mp4", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpeg", "mpg", "ts", "m2ts", "ogv",
-    "3gp", "vob", "divx", "rmvb", "asf", "m3u8", "mpd",
+    "mkv", "mp4", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpeg", "mpg", "ts", "m2ts", "mts",
+    "ogv", "3gp", "vob", "divx", "rmvb", "asf", "iso", "m3u8", "mpd",
 ];
 
 pub const AUDIO_EXTENSIONS: &[&str] = &[
     "mp3", "flac", "wav", "aac", "m4a", "ogg", "opus", "wma", "ac3", "eac3", "dts", "alac",
+    "aiff", "aif", "ape", "mka",
 ];
+
+const QUERY_FILE_KEYS: &[&str] = &[
+    "file", "filename", "name", "path", "video", "media", "download", "src", "url",
+];
+
+pub const SUBTITLE_EXTENSIONS: &[&str] = &["srt", "ass", "ssa", "vtt", "sub"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -235,6 +242,19 @@ pub fn detect_media_from_url_only(raw_url: &str) -> MediaDetectionResult {
                     }
                 }
             }
+            if ext_found.is_none() {
+                for (k, v) in parsed.query_pairs() {
+                    if QUERY_FILE_KEYS.iter().any(|qk| k.eq_ignore_ascii_case(qk)) {
+                        let leaf = v.rsplit(['/', '\\']).next().unwrap_or(&v);
+                        if let Some((_, ext)) = leaf.rsplit_once('.') {
+                            if classify_media_extension(ext).is_some() {
+                                ext_found = Some(ext.to_ascii_lowercase());
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -285,17 +305,55 @@ pub fn extract_server_filename(
         }
     }
 
-    // 2. Extract final non-empty URL path segment and UTF-8 percent-decode it
-    if let Ok(parsed) = Url::parse(raw_url.trim()) {
-        if let Some(seg) = parsed
+    // 1b. Handle `local://` or raw local file paths directly
+    let trimmed_raw = raw_url.trim();
+    if let Some(local_rest) = trimmed_raw.strip_prefix("local://") {
+        if let Some(leaf) = local_rest.rsplit(['/', '\\']).find(|s| !s.is_empty()) {
+            let sanitized = sanitize_windows_filename(leaf);
+            if !sanitized.is_empty() {
+                return sanitized;
+            }
+        }
+    }
+
+    // 2. Extract final non-empty URL path segment (or query file param if path has no media extension)
+    if let Ok(parsed) = Url::parse(trimmed_raw) {
+        let path_candidate = parsed
             .path_segments()
             .and_then(|mut s| s.rfind(|part| !part.is_empty()))
-        {
-            let decoded = percent_decode_str(seg).decode_utf8_lossy().to_string();
+            .map(|seg| percent_decode_str(seg).decode_utf8_lossy().to_string());
+
+        let path_has_media_or_sub_ext = path_candidate
+            .as_deref()
+            .and_then(|name| name.rsplit_once('.'))
+            .is_some_and(|(_, ext)| classify_media_extension(ext).is_some() || is_subtitle_extension(ext));
+
+        if !path_has_media_or_sub_ext {
+            for (k, v) in parsed.query_pairs() {
+                if QUERY_FILE_KEYS.iter().any(|qk| k.eq_ignore_ascii_case(qk)) {
+                    let leaf = v.rsplit(['/', '\\']).find(|s| !s.is_empty()).unwrap_or(&v);
+                    if let Some((_, ext)) = leaf.rsplit_once('.') {
+                        if classify_media_extension(ext).is_some() || is_subtitle_extension(ext) {
+                            let sanitized = sanitize_windows_filename(leaf);
+                            if !sanitized.is_empty() {
+                                return ensure_extension(sanitized, content_type);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(decoded) = path_candidate {
             let sanitized = sanitize_windows_filename(&decoded);
             if !sanitized.is_empty() {
                 return ensure_extension(sanitized, content_type);
             }
+        }
+    } else if let Some(leaf) = trimmed_raw.rsplit(['/', '\\']).find(|s| !s.is_empty()) {
+        let sanitized = sanitize_windows_filename(leaf);
+        if !sanitized.is_empty() {
+            return ensure_extension(sanitized, content_type);
         }
     }
 
@@ -537,4 +595,81 @@ pub async fn probe_media_url(client: &reqwest::Client, raw_url: &str) -> Result<
     }
 
     Ok(base)
+}
+
+pub fn is_subtitle_extension(ext: &str) -> bool {
+    let lower = ext.trim_start_matches('.').to_ascii_lowercase();
+    SUBTITLE_EXTENSIONS.contains(&lower.as_str())
+}
+
+pub fn is_local_media_path(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .and_then(classify_media_extension)
+        .is_some()
+}
+
+pub fn is_local_subtitle_path(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(is_subtitle_extension)
+}
+
+pub fn extract_decoded_stem_and_ext(raw_url: &str) -> Option<(String, String)> {
+    let clean = raw_url.trim();
+    let last_seg = if let Ok(parsed) = Url::parse(clean) {
+        parsed
+            .path_segments()
+            .and_then(|mut s| s.rfind(|part| !part.is_empty()))
+            .map(|seg| percent_decode_str(seg).decode_utf8_lossy().to_string())
+    } else {
+        clean
+            .rsplit(['/', '\\'])
+            .find(|part| !part.is_empty())
+            .map(|seg| percent_decode_str(seg).decode_utf8_lossy().to_string())
+    }?;
+    let (stem, ext) = last_seg.rsplit_once('.')?;
+    let stem_clean = stem.trim().to_ascii_lowercase();
+    let ext_clean = ext.trim().to_ascii_lowercase();
+    if stem_clean.is_empty() || ext_clean.is_empty() {
+        return None;
+    }
+    Some((stem_clean, ext_clean))
+}
+
+/// Finds server subtitle URLs (`.srt`, `.ass`, `.ssa`, `.vtt`, `.sub`) on a directory listing page
+/// whose filename stem matches `media_url` (exact stem match or `<stem>.<lang>` such as `Movie.en.srt`).
+/// Exact stem matches are ordered first.
+pub fn match_subtitle_urls_for_media(
+    media_url: &str,
+    candidate_sub_urls: &[String],
+) -> Vec<String> {
+    let Some((media_stem, _)) = extract_decoded_stem_and_ext(media_url) else {
+        return Vec::new();
+    };
+    let mut exact = Vec::new();
+    let mut suffixed = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for raw in candidate_sub_urls {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || !seen.insert(trimmed.to_string()) {
+            continue;
+        }
+        let Some((sub_stem, sub_ext)) = extract_decoded_stem_and_ext(trimmed) else {
+            continue;
+        };
+        if !is_subtitle_extension(&sub_ext) {
+            continue;
+        }
+        if sub_stem == media_stem {
+            exact.push(trimmed.to_string());
+        } else if let Some(rest) = sub_stem.strip_prefix(&media_stem) {
+            if rest.starts_with('.') || rest.starts_with('_') || rest.starts_with('-') {
+                suffixed.push(trimmed.to_string());
+            }
+        }
+    }
+    exact.extend(suffixed);
+    exact
 }

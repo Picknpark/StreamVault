@@ -62,16 +62,24 @@ export function initRecentMediaModule(handlers) {
   });
 
   document.getElementById("btn-clear-recent-media")?.addEventListener("click", async () => {
-    await invokeCmd("recent_media_clear");
-    store.recentMedia = [];
-    renderRecentMediaPanel();
-    showToast("Cleared Recent Media (Bookmarks were untouched)", "info");
+    try {
+      await invokeCmd("recent_media_clear");
+      store.recentMedia = [];
+      renderRecentMediaPanel();
+      showToast("Cleared Recent Media (Bookmarks were untouched)", "info");
+    } catch (e) {
+      showToast(String(e), "error");
+    }
   });
 }
 
 export async function refreshRecentMedia() {
-  const rows = await invokeCmd("recent_media_list", { limit: 60 });
-  store.recentMedia = Array.isArray(rows) ? rows : [];
+  try {
+    const rows = await invokeCmd("recent_media_list", { limit: 60 });
+    store.recentMedia = Array.isArray(rows) ? rows : [];
+  } catch (e) {
+    showToast(String(e), "error");
+  }
   renderRecentMediaPanel();
 }
 
@@ -229,9 +237,15 @@ export function renderRecentMediaPanel() {
           await invokeCmd("playback_position_reset", { url: itemUrl });
           mediaHandlers?.playInStreamVault(itemUrl, item.title, 0);
         } else if (act === "external" && itemUrl) {
-          mediaHandlers?.openInExternalPlayer(itemUrl, item.title);
+          const cleanExtTarget = itemUrl.startsWith("local://")
+            ? itemUrl.slice("local://".length)
+            : itemUrl;
+          mediaHandlers?.openInExternalPlayer(cleanExtTarget, item.title);
         } else if (act === "copy" && itemUrl) {
-          await copyTextToClipboard(itemUrl);
+          const cleanCopy = itemUrl.startsWith("local://")
+            ? itemUrl.slice("local://".length)
+            : itemUrl;
+          await copyTextToClipboard(cleanCopy);
         } else if (act === "remove") {
           await invokeCmd("recent_media_remove", { id });
           await refreshRecentMedia();

@@ -375,13 +375,32 @@ pub fn add_custom_external_player(
 }
 
 pub fn remove_custom_external_player(db: &Database, custom_id: i64) -> Result<()> {
-    db.with_conn(|conn| {
+    let removed_exe: Option<String> = db.with_conn(|conn| {
+        let exe: Option<String> = conn
+            .query_row(
+                "SELECT executable_path FROM custom_external_players WHERE id = ?1",
+                params![custom_id],
+                |r| r.get(0),
+            )
+            .ok();
         conn.execute(
             "DELETE FROM custom_external_players WHERE id = ?1",
             params![custom_id],
         )?;
-        Ok(())
-    })
+        Ok(exe)
+    })?;
+
+    if let Some(exe) = removed_exe {
+        if let Ok(settings) = db.get_settings() {
+            if normalize_exe_key(&settings.default_external_player) == normalize_exe_key(&exe) {
+                let _ = db.update_single_setting(
+                    "default_external_player",
+                    serde_json::Value::String("ask".to_string()),
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 fn list_custom_players(db: &Database) -> Result<Vec<(i64, String, String)>> {
@@ -396,8 +415,29 @@ fn list_custom_players(db: &Database) -> Result<Vec<(i64, String, String)>> {
     })
 }
 
-/// Builds the safe OS `Command` passing the EXACT original media URL as a discrete process argument
-/// (never via `cmd.exe`, never decoding `%20` or modifying parentheses/Unicode/special characters).
+fn resolve_external_media_target(raw_target: &str) -> Result<(String, String)> {
+    let trimmed = raw_target.trim();
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return Ok((trimmed.to_string(), trimmed.to_string()));
+    }
+
+    let local_raw = trimmed.strip_prefix("local://").unwrap_or(trimmed).trim();
+    if !local_raw.is_empty() && !local_raw.starts_with('-') {
+        let native_path = crate::portable::normalize_native_path(std::path::PathBuf::from(local_raw));
+        if native_path.is_file() {
+            let arg_str = native_path.to_string_lossy().to_string();
+            let recent_key = format!("local://{}", arg_str.replace('\\', "/"));
+            return Ok((arg_str, recent_key));
+        }
+    }
+
+    anyhow::bail!(
+        "External player launch requires a valid http(s):// media URL or an existing local media file"
+    )
+}
+
+/// Builds the safe OS `Command` passing the EXACT original media URL (or verified local file path)
+/// as a discrete process argument (never via `cmd.exe`, never decoding `%20` or modifying characters).
 pub fn build_external_player_command(executable_path: &str, original_media_url: &str) -> Result<Command> {
     let clean_exe = executable_path.trim().trim_matches('"');
     if clean_exe.is_empty() {
@@ -411,13 +451,10 @@ pub fn build_external_player_command(executable_path: &str, original_media_url: 
         );
     }
 
-    let url_trimmed = original_media_url.trim();
-    if !url_trimmed.starts_with("http://") && !url_trimmed.starts_with("https://") {
-        anyhow::bail!("External player launch only permits http:// or https:// media URLs");
-    }
+    let (target_arg, _) = resolve_external_media_target(original_media_url)?;
 
     let mut cmd = Command::new(exe_path);
-    cmd.arg(url_trimmed)
+    cmd.arg(&target_arg)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -425,7 +462,7 @@ pub fn build_external_player_command(executable_path: &str, original_media_url: 
     Ok(cmd)
 }
 
-/// Launches the external media player with the exact original URL, records Recent Media (`external`),
+/// Launches the external media player with the exact original URL (or local file), records Recent Media (`external`),
 /// and logs structured diagnostic output.
 pub fn launch_in_external_player(
     db: &Database,
@@ -434,6 +471,7 @@ pub fn launch_in_external_player(
     original_media_url: &str,
     custom_title: Option<&str>,
 ) -> Result<()> {
+    let (_, recent_key) = resolve_external_media_target(original_media_url)?;
     let mut cmd = build_external_player_command(executable_path, original_media_url)?;
     let child = cmd.spawn().with_context(|| {
         format!("Failed to launch external media player '{executable_path}'")
@@ -441,7 +479,7 @@ pub fn launch_in_external_player(
 
     logger.info_ctx(
         "external_player",
-        "Launched media URL in external player",
+        "Launched media in external player",
         serde_json::json!({
             "executable": executable_path,
             "pid": child.id(),
@@ -449,7 +487,7 @@ pub fn launch_in_external_player(
         }),
     );
 
-    let _ = db.record_recent_media_open(original_media_url, custom_title, None, "external");
+    let _ = db.record_recent_media_open(&recent_key, custom_title, None, "external");
     Ok(())
 }
 

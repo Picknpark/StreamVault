@@ -105,11 +105,15 @@ export function renderBookmarksPanel() {
   folderPane.querySelectorAll("[data-del-folder]").forEach((btn) => {
     btn.addEventListener("click", async (ev) => {
       ev.stopPropagation();
-      const fid = Number(btn.getAttribute("data-del-folder"));
-      await invokeCmd("bookmark_folder_delete", { id: fid, deleteBookmarks: false });
-      if (store.selectedBookmarkFolderId === fid) store.selectedBookmarkFolderId = "all";
-      await refreshBookmarks();
-      showToast("Folder deleted (bookmarks moved to Unsorted)");
+      try {
+        const fid = Number(btn.getAttribute("data-del-folder"));
+        await invokeCmd("bookmark_folder_delete", { id: fid, deleteBookmarks: false });
+        if (store.selectedBookmarkFolderId === fid) store.selectedBookmarkFolderId = "all";
+        await refreshBookmarks();
+        showToast("Folder deleted (bookmarks moved to Unsorted)");
+      } catch (e) {
+        showToast(String(e), "error");
+      }
     });
   });
 
@@ -270,7 +274,8 @@ export function openBookmarkEditorModal(existing, prefill = null) {
     ),
   ].join("");
 
-  const canFillFromTab = !existing && !prefill && activeTab?.url;
+  const canFillFromTab =
+    !existing && !prefill && activeTab?.url && activeTab.url !== "about:blank";
 
   openModal(
     `

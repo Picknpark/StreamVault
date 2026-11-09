@@ -48,6 +48,8 @@ pub struct AppSettings {
     pub sidebar_collapsed: bool,
     pub show_bookmark_bar: bool,
     pub recent_media_view_mode: String, // "grid" | "list"
+    #[serde(default)]
+    pub github_repo_slug: String, // e.g. "owner/streamvault" for optional update check
 
     // Media
     pub default_playback_method: String,  // "ask" | "in_app" | "external"
@@ -55,6 +57,10 @@ pub struct AppSettings {
     pub auto_detect_media: bool,
     pub probe_http_headers_for_media: bool,
     pub resume_playback_behavior: String, // "ask" | "always_resume" | "always_beginning"
+    #[serde(default = "default_true_bool")]
+    pub auto_play_next_episode: bool,
+    #[serde(default = "default_true_bool")]
+    pub auto_load_matching_subtitle: bool,
     pub default_playback_speed: f64,
     pub seek_interval_seconds: i64,
     pub preferred_subtitle_lang: String,
@@ -67,6 +73,8 @@ pub struct AppSettings {
     pub default_download_dir: String,     // Portable relative "data/downloads" by default
     pub ask_save_as_every_time: bool,     // True by default per Section 8 & 14
     pub max_concurrent_downloads: usize,
+    #[serde(default)]
+    pub download_speed_limit_kbps: u64,   // 0 = unlimited
     pub download_notifications: bool,
 
     // Cache
@@ -76,6 +84,10 @@ pub struct AppSettings {
 
     // Privacy
     pub browsing_history_enabled: bool,
+}
+
+fn default_true_bool() -> bool {
+    true
 }
 
 impl Default for AppSettings {
@@ -89,12 +101,15 @@ impl Default for AppSettings {
             sidebar_collapsed: false,
             show_bookmark_bar: true,
             recent_media_view_mode: "grid".to_string(),
+            github_repo_slug: String::new(),
 
             default_playback_method: "ask".to_string(),
             default_external_player: "ask".to_string(),
             auto_detect_media: true,
             probe_http_headers_for_media: true,
             resume_playback_behavior: "ask".to_string(),
+            auto_play_next_episode: true,
+            auto_load_matching_subtitle: true,
             default_playback_speed: 1.0,
             seek_interval_seconds: 10,
             preferred_subtitle_lang: "eng".to_string(),
@@ -106,6 +121,7 @@ impl Default for AppSettings {
             default_download_dir: "data/downloads".to_string(),
             ask_save_as_every_time: true,
             max_concurrent_downloads: 3,
+            download_speed_limit_kbps: 0,
             download_notifications: true,
 
             clear_temp_cache_on_exit: true,
@@ -205,12 +221,15 @@ fn categorize_setting_key(key: &str) -> &'static str {
         | "theme"
         | "sidebar_collapsed"
         | "show_bookmark_bar"
-        | "recent_media_view_mode" => "general",
+        | "recent_media_view_mode"
+        | "github_repo_slug" => "general",
         "default_playback_method"
         | "default_external_player"
         | "auto_detect_media"
         | "probe_http_headers_for_media"
         | "resume_playback_behavior"
+        | "auto_play_next_episode"
+        | "auto_load_matching_subtitle"
         | "default_playback_speed"
         | "seek_interval_seconds"
         | "preferred_subtitle_lang"
@@ -221,6 +240,7 @@ fn categorize_setting_key(key: &str) -> &'static str {
         "default_download_dir"
         | "ask_save_as_every_time"
         | "max_concurrent_downloads"
+        | "download_speed_limit_kbps"
         | "download_notifications" => "downloads",
         "clear_temp_cache_on_exit" | "startup_cache_recovery" | "max_temp_cache_mb" => "cache",
         _ => "privacy",

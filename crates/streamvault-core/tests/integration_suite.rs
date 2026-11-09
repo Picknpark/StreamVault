@@ -559,3 +559,245 @@ fn test_blank_homepage_clipboard_viewmode_and_net_sampler() {
     let _ = fs::remove_dir_all(&temp_root);
 }
 
+#[test]
+fn test_subtitle_matching_local_sidecars_single_backup_and_semver() {
+    let temp_root =
+        std::env::temp_dir().join(format!("sv_tier123_unit_{}", uuid::Uuid::new_v4().simple()));
+    fs::create_dir_all(&temp_root).unwrap();
+
+    // 1. Server subtitle stem matching (exact + language suffix, percent-encoded)
+    let ep_url = "http://172.16.50.12/Series/Show%20S01E02%20%281080p%29.mkv";
+    let candidates = vec![
+        "http://172.16.50.12/Series/Show%20S01E01%20%281080p%29.srt".to_string(),
+        "http://172.16.50.12/Series/Show%20S01E02%20%281080p%29.en.ass".to_string(),
+        "http://172.16.50.12/Series/Show%20S01E02%20%281080p%29.srt".to_string(),
+        "http://172.16.50.12/Series/Show%20S01E03%20%281080p%29.vtt".to_string(),
+    ];
+    let matched = streamvault_core::media_detect::match_subtitle_urls_for_media(ep_url, &candidates);
+    assert_eq!(matched.len(), 2);
+    assert_eq!(
+        matched[0],
+        "http://172.16.50.12/Series/Show%20S01E02%20%281080p%29.srt"
+    );
+    assert_eq!(
+        matched[1],
+        "http://172.16.50.12/Series/Show%20S01E02%20%281080p%29.en.ass"
+    );
+
+    // 2. Local sidecar subtitle discovery
+    let local_dir = temp_root.join("local_movies");
+    fs::create_dir_all(&local_dir).unwrap();
+    let vid = local_dir.join("Dune.Part.Two.2024.mkv");
+    let sub1 = local_dir.join("Dune.Part.Two.2024.srt");
+    let sub2 = local_dir.join("Dune.Part.Two.2024.en.ass");
+    let unrelated = local_dir.join("Other.Movie.srt");
+    fs::write(&vid, b"mkv").unwrap();
+    fs::write(&sub1, b"1\n00:00:01,000 --> 00:00:02,000\nHi\n").unwrap();
+    fs::write(&sub2, b"[Script Info]\n").unwrap();
+    fs::write(&unrelated, b"nope").unwrap();
+
+    assert!(streamvault_core::media_detect::is_local_media_path(&vid));
+    assert!(streamvault_core::media_detect::is_local_subtitle_path(&sub1));
+    let sidecars = streamvault_core::mpv_engine::discover_local_sidecar_subtitles(&vid);
+    assert_eq!(sidecars.len(), 2);
+
+    // 3. SemVer GitHub update comparison
+    assert!(streamvault_core::is_newer_semver("1.1.0", "1.2.0"));
+    assert!(streamvault_core::is_newer_semver("1.1.0", "v2.0.0"));
+    assert!(!streamvault_core::is_newer_semver("1.1.0", "1.1.0"));
+    assert!(!streamvault_core::is_newer_semver("1.1.0", "1.0.9"));
+
+    // 4. Tier 1–3 settings persistence + single rolling `streamvault.backup.db` invariant
+    for _ in 0..3 {
+        let core = StreamVaultCore::initialize(Some(temp_root.clone())).unwrap();
+        core.db
+            .update_single_setting("auto_play_next_episode", serde_json::json!(false))
+            .unwrap();
+        core.db
+            .update_single_setting("download_speed_limit_kbps", serde_json::json!(2048))
+            .unwrap();
+        core.db
+            .update_single_setting("github_repo_slug", serde_json::json!("streamvault/StreamVault"))
+            .unwrap();
+        let s = core.db.get_settings().unwrap();
+        assert!(!s.auto_play_next_episode);
+        assert_eq!(s.download_speed_limit_kbps, 2048);
+        assert_eq!(s.github_repo_slug, "streamvault/StreamVault");
+        core.graceful_shutdown();
+    }
+
+    let backup_files: Vec<_> = fs::read_dir(temp_root.join("data").join("backups"))
+        .unwrap()
+        .flatten()
+        .collect();
+    assert_eq!(
+        backup_files.len(),
+        1,
+        "data/backups must contain strictly ONE rolling backup file (streamvault.backup.db)"
+    );
+    assert_eq!(
+        backup_files[0].file_name().to_string_lossy(),
+        "streamvault.backup.db"
+    );
+
+    let _ = fs::remove_dir_all(&temp_root);
+}
+
+#[tokio::test]
+async fn test_batch_media_grabber_queue_and_concurrency_cap() {
+    let payload: Arc<Vec<u8>> = Arc::new((0..65_536).map(|i| (i % 251) as u8).collect());
+    let (port, _srv) = spawn_mock_media_server(payload.clone(), true, false).await;
+    let addr = format!("127.0.0.1:{port}");
+
+    let temp_root =
+        std::env::temp_dir().join(format!("sv_batch_dl_{}", uuid::Uuid::new_v4().simple()));
+    let core = StreamVaultCore::initialize(Some(temp_root.clone())).unwrap();
+    core.db
+        .update_single_setting("max_concurrent_downloads", serde_json::json!(2))
+        .unwrap();
+
+    let batch_dir = temp_root.join("Season_01");
+    let urls = vec![
+        format!("http://{addr}/Series/Episode.S01E01.mkv"),
+        format!("http://{addr}/Series/Episode.S01E02.mkv"),
+        format!("http://{addr}/Series/Episode.S01E03.mkv"),
+        format!("http://{addr}/Series/Episode.S01E04.mkv"),
+    ];
+
+    let queued = core
+        .downloader
+        .enqueue_batch_downloads(urls, Some(batch_dir.clone()))
+        .unwrap();
+    assert_eq!(queued.len(), 4);
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(12);
+    loop {
+        let all = core.downloader.list_downloads_with_live_progress().unwrap();
+        if all.len() == 4 && all.iter().all(|r| r.status == "completed") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Batch downloads did not complete before timeout: {:?}",
+            all.iter().map(|r| (&r.filename, &r.status)).collect::<Vec<_>>()
+        );
+        tokio::time::sleep(Duration::from_millis(60)).await;
+    }
+
+    for ep in 1..=4 {
+        let f = batch_dir.join(format!("Episode.S01E0{ep}.mkv"));
+        assert!(f.is_file(), "Expected batch file {}", f.display());
+        assert_eq!(fs::read(&f).unwrap().len(), payload.len());
+    }
+
+    core.graceful_shutdown();
+    let _ = fs::remove_dir_all(&temp_root);
+}
+
+#[tokio::test]
+async fn test_audit_bugfix_regressions() {
+    // 1. Synced media extensions + query-parameter & local:// filename extraction
+    for ext in [
+        "m2ts", "mts", "mpg", "mpeg", "ogv", "3gp", "divx", "alac", "aiff", "ape",
+    ] {
+        let u = format!("http://172.16.50.10/Archive/TestClip.{ext}");
+        let det = detect_media_from_url_only(&u);
+        assert!(det.is_media, "Expected .{ext} to be detected as direct media");
+    }
+    let query_url = "https://cdn.example.org/download?id=9981&filename=Blade%20Runner%202049.mkv";
+    let query_det = detect_media_from_url_only(query_url);
+    assert!(query_det.is_media);
+    assert_eq!(query_det.suggested_filename, "Blade Runner 2049.mkv");
+
+    let local_uri = r"local://D:\Media\Movies\My Local Episode (2024).mp4";
+    assert_eq!(
+        extract_server_filename(local_uri, None, None),
+        "My Local Episode (2024).mp4"
+    );
+
+    // 2. Custom external player removal resets default_external_player & local:// launch support
+    let temp_root =
+        std::env::temp_dir().join(format!("sv_reg_fix_{}", uuid::Uuid::new_v4().simple()));
+    let core = StreamVaultCore::initialize(Some(temp_root.clone())).unwrap();
+
+    let custom_exe = temp_root.join("CustomMpcHc64.exe");
+    fs::write(&custom_exe, b"MZ_custom_player").unwrap();
+    let custom_exe_str = custom_exe.to_string_lossy().to_string();
+
+    let added = streamvault_core::external_player::add_custom_external_player(
+        &core.db,
+        "MPC-HC Custom",
+        &custom_exe_str,
+    )
+    .unwrap();
+    let custom_id = added.custom_id.expect("custom_id present");
+    core.db
+        .update_single_setting("default_external_player", serde_json::json!(&custom_exe_str))
+        .unwrap();
+    assert_eq!(
+        core.db.get_settings().unwrap().default_external_player,
+        custom_exe_str
+    );
+
+    streamvault_core::external_player::remove_custom_external_player(&core.db, custom_id)
+        .unwrap();
+    assert_eq!(
+        core.db.get_settings().unwrap().default_external_player,
+        "ask",
+        "Removing custom default player must reset default_external_player to 'ask'"
+    );
+
+    let local_media_file = temp_root.join("Sample Local Movie.mkv");
+    fs::write(&local_media_file, vec![0x11u8; 4096]).unwrap();
+    let local_prefixed = format!("local://{}", local_media_file.to_string_lossy());
+    let local_cmd = build_external_player_command(&custom_exe_str, &local_prefixed).unwrap();
+    let local_args: Vec<String> = local_cmd
+        .get_args()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect();
+    assert_eq!(
+        local_args,
+        vec![local_media_file.to_string_lossy().to_string()]
+    );
+
+    // 3. Inverted HTTP Range header (`bytes=5000-1000`) is safely ignored per RFC 9110 (200 OK, no u64 underflow)
+    let payload: Arc<Vec<u8>> = Arc::new((0..32_768).map(|i| (i % 251) as u8).collect());
+    let (port, _srv) = spawn_mock_media_server(payload.clone(), true, false).await;
+    let src_url = format!("http://127.0.0.1:{port}/Movies/RangeCheck.mkv");
+    let session = core.stream_cache.start_stream_session(&src_url).await.unwrap();
+    let client = reqwest::Client::new();
+    let bad_range_resp = client
+        .get(&session.local_stream_url)
+        .header("Range", "bytes=5000-1000")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad_range_resp.status().as_u16(), 200);
+    assert_eq!(bad_range_resp.bytes().await.unwrap().len(), payload.len());
+
+    // 4. Removing an active/throttled download cancels cleanly without re-creating zombie DB row
+    core.db
+        .update_single_setting("download_speed_limit_kbps", serde_json::json!(8))
+        .unwrap();
+    let big_payload: Arc<Vec<u8>> = Arc::new(vec![0x5Au8; 262_144]);
+    let (slow_port, _slow_srv) = spawn_mock_media_server(big_payload, true, false).await;
+    let slow_url = format!("http://127.0.0.1:{slow_port}/Movies/SlowTransfer.mkv");
+    let dl_rec = core
+        .downloader
+        .start_download(&slow_url, None, true)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    core.downloader.remove_download_entry(&dl_rec.id).unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let remaining = core.downloader.list_downloads_with_live_progress().unwrap();
+    assert!(
+        remaining.iter().all(|r| r.id != dl_rec.id),
+        "Deleted active download must not reappear as a zombie row"
+    );
+
+    core.graceful_shutdown();
+    let _ = fs::remove_dir_all(&temp_root);
+}
+
+

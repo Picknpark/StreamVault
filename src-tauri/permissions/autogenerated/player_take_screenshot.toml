@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-player-take-screenshot"
+description = "Enables the player_take_screenshot command without any pre-configured scope."
+commands.allow = ["player_take_screenshot"]
+
+[[permission]]
+identifier = "deny-player-take-screenshot"
+description = "Denies the player_take_screenshot command without any pre-configured scope."
+commands.deny = ["player_take_screenshot"]

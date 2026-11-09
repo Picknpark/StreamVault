@@ -1,12 +1,15 @@
 import { renderBookmarkBar } from "./browser.js";
 import { invokeCmd } from "./ipc.js";
 import { store } from "./state.js";
-import { escapeHtml, formatBytes, showToast } from "./utils.js";
+import { copyTextToClipboard, escapeHtml, formatBytes, showToast } from "./utils.js";
 
 let applyThemeFn = null;
+let switchViewFn = null;
+let settingsRenderSeq = 0;
 
-export function initSettingsModule({ onApplyTheme }) {
+export function initSettingsModule({ onApplyTheme, onSwitchView }) {
   applyThemeFn = onApplyTheme;
+  switchViewFn = onSwitchView;
 
   document.querySelectorAll("#settings-category-tabs .settings-tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -38,15 +41,18 @@ async function updateSetting(key, value) {
 export async function renderSettingsPanel() {
   const pane = document.getElementById("settings-content-pane");
   if (!pane) return;
+  const seq = ++settingsRenderSeq;
 
   if (!store.settings) {
     pane.innerHTML = `<div class="settings-group"><p style="margin:0;color:var(--text-secondary);">Loading application settings...</p></div>`;
     try {
       store.settings = await invokeCmd("settings_get");
+      if (seq !== settingsRenderSeq) return;
       if (store.settings?.theme && applyThemeFn) {
         applyThemeFn(store.settings.theme);
       }
     } catch (err) {
+      if (seq !== settingsRenderSeq) return;
       pane.innerHTML = `
         <div class="settings-group">
           <h3>Unable to Load Settings</h3>
@@ -150,6 +156,7 @@ export async function renderSettingsPanel() {
     } catch (_) {
       store.externalPlayers = store.externalPlayers || [];
     }
+    if (seq !== settingsRenderSeq) return;
     const players = store.externalPlayers || [];
 
     const playerOptions = [
@@ -225,6 +232,22 @@ export async function renderSettingsPanel() {
               .join("")}
           </select>
         </div>
+
+        <div class="setting-row">
+          <div class="setting-label">
+            <strong>Auto-Play Next Episode in Directory / Playlist</strong>
+            <span>Automatically advance to the next sibling episode when playback finishes cleanly</span>
+          </div>
+          <input id="set-autoplay-next" type="checkbox" ${s.auto_play_next_episode !== false ? "checked" : ""} />
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-label">
+            <strong>Auto-Load Matching Subtitle (.srt / .ass / .vtt)</strong>
+            <span>Automatically attach stem-matching server or local sidecar subtitles</span>
+          </div>
+          <input id="set-autoload-sub" type="checkbox" ${s.auto_load_matching_subtitle !== false ? "checked" : ""} />
+        </div>
       </div>
 
       <div class="settings-group">
@@ -294,6 +317,10 @@ export async function renderSettingsPanel() {
       updateSetting("default_playback_speed", Number(e.target.value));
     pane.querySelector("#set-seek-sec").onchange = (e) =>
       updateSetting("seek_interval_seconds", Number(e.target.value));
+    pane.querySelector("#set-autoplay-next").onchange = (e) =>
+      updateSetting("auto_play_next_episode", e.target.checked);
+    pane.querySelector("#set-autoload-sub").onchange = (e) =>
+      updateSetting("auto_load_matching_subtitle", e.target.checked);
     pane.querySelector("#set-ext-player").onchange = (e) =>
       updateSetting("default_external_player", e.target.value);
 
@@ -303,18 +330,26 @@ export async function renderSettingsPanel() {
         showToast("Select a specific player first to test", "error");
         return;
       }
-      const res = await invokeCmd("external_player_test", { executablePath: exe });
-      showToast(res.message, res.success ? "success" : "error");
-    };
-
-    pane.querySelector("#btn-browse-player-exe").onclick = async () => {
-      const picked = await invokeCmd("external_player_browse_exe");
-      if (picked) {
-        pane.querySelector("#cust-player-path").value = picked;
+      try {
+        const res = await invokeCmd("external_player_test", { executablePath: exe });
+        showToast(res.message, res.success ? "success" : "error");
+      } catch (e) {
+        showToast(String(e), "error");
       }
     };
 
-    pane.querySelector("#btn-add-cust-player").onclick = async () => {
+    pane.querySelector("#btn-browse-player-exe").onclick = async () => {
+      try {
+        const picked = await invokeCmd("external_player_browse_exe");
+        if (picked) {
+          pane.querySelector("#cust-player-path").value = picked;
+        }
+      } catch (e) {
+        showToast(String(e), "error");
+      }
+    };
+
+    const addCustomPlayer = async () => {
       const name = pane.querySelector("#cust-player-name").value.trim();
       const executablePath = pane.querySelector("#cust-player-path").value.trim();
       if (!executablePath) return;
@@ -326,22 +361,42 @@ export async function renderSettingsPanel() {
         showToast(String(e), "error");
       }
     };
+    pane.querySelector("#btn-add-cust-player").onclick = addCustomPlayer;
+    [pane.querySelector("#cust-player-name"), pane.querySelector("#cust-player-path")].forEach(
+      (inp) => {
+        inp?.addEventListener("keydown", (ev) => {
+          if (ev.key === "Enter") {
+            ev.preventDefault();
+            addCustomPlayer();
+          }
+        });
+      }
+    );
 
     pane.querySelectorAll("[data-test-exe]").forEach((btn) => {
       btn.onclick = async () => {
-        const res = await invokeCmd("external_player_test", {
-          executablePath: btn.getAttribute("data-test-exe"),
-        });
-        showToast(res.message, res.success ? "success" : "error");
+        try {
+          const res = await invokeCmd("external_player_test", {
+            executablePath: btn.getAttribute("data-test-exe"),
+          });
+          showToast(res.message, res.success ? "success" : "error");
+        } catch (e) {
+          showToast(String(e), "error");
+        }
       };
     });
 
     pane.querySelectorAll("[data-rm-cust]").forEach((btn) => {
       btn.onclick = async () => {
-        await invokeCmd("external_player_remove_custom", {
-          customId: Number(btn.getAttribute("data-rm-cust")),
-        });
-        renderSettingsPanel();
+        try {
+          await invokeCmd("external_player_remove_custom", {
+            customId: Number(btn.getAttribute("data-rm-cust")),
+          });
+          store.settings = await invokeCmd("settings_get");
+          renderSettingsPanel();
+        } catch (e) {
+          showToast(String(e), "error");
+        }
       };
     });
     return;
@@ -379,22 +434,75 @@ export async function renderSettingsPanel() {
           </div>
           <input id="set-dl-notif" type="checkbox" ${s.download_notifications ? "checked" : ""} />
         </div>
+
+        <div class="setting-row">
+          <div class="setting-label">
+            <strong>Max Concurrent Downloads</strong>
+            <span>Active parallel downloads in Download Manager &amp; Batch Media Grabber (excess items queue automatically)</span>
+          </div>
+          <select id="set-max-conc" class="select-field">
+            ${[1, 2, 3, 4, 6, 8]
+              .map(
+                (v) =>
+                  `<option value="${v}" ${(s.max_concurrent_downloads || 3) === v ? "selected" : ""}>${v} simultaneous</option>`
+              )
+              .join("")}
+          </select>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-label">
+            <strong>Per-Download Speed Limit (KB/s)</strong>
+            <span>Set <code>0</code> for unlimited full LAN/broadband speed</span>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <input id="set-dl-speed-limit" class="input-field" type="number" min="0" step="256" style="width:130px;" value="${Number(s.download_speed_limit_kbps) || 0}" />
+            <button id="btn-save-speed-limit" class="btn btn-primary btn-sm">Apply</button>
+          </div>
+        </div>
       </div>
     `;
 
     pane.querySelector("#btn-browse-dl-dir").onclick = async () => {
-      const chosen = await invokeCmd("settings_browse_download_dir");
-      if (chosen) {
-        store.settings = await invokeCmd("settings_get");
-        renderSettingsPanel();
+      try {
+        const chosen = await invokeCmd("settings_browse_download_dir");
+        if (chosen) {
+          store.settings = await invokeCmd("settings_get");
+          renderSettingsPanel();
+        }
+      } catch (e) {
+        showToast(String(e), "error");
       }
     };
-    pane.querySelector("#btn-save-dl-dir").onclick = () =>
+    const saveDlDir = () =>
       updateSetting("default_download_dir", pane.querySelector("#set-dl-dir").value.trim());
+    pane.querySelector("#btn-save-dl-dir").onclick = saveDlDir;
+    pane.querySelector("#set-dl-dir").addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        saveDlDir();
+      }
+    });
     pane.querySelector("#set-ask-saveas").onchange = (e) =>
       updateSetting("ask_save_as_every_time", e.target.checked);
     pane.querySelector("#set-dl-notif").onchange = (e) =>
       updateSetting("download_notifications", e.target.checked);
+    pane.querySelector("#set-max-conc").onchange = (e) =>
+      updateSetting("max_concurrent_downloads", Number(e.target.value));
+    const saveSpeedLimit = () => {
+      const val = Math.max(
+        0,
+        Math.round(Number(pane.querySelector("#set-dl-speed-limit").value) || 0)
+      );
+      updateSetting("download_speed_limit_kbps", val);
+    };
+    pane.querySelector("#btn-save-speed-limit").onclick = saveSpeedLimit;
+    pane.querySelector("#set-dl-speed-limit").addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        saveSpeedLimit();
+      }
+    });
     return;
   }
 
@@ -403,6 +511,7 @@ export async function renderSettingsPanel() {
     try {
       summary = await invokeCmd("stream_cache_summary");
     } catch (_) {}
+    if (seq !== settingsRenderSeq) return;
     pane.innerHTML = `
       <div class="settings-group">
         <h3>Temporary Streaming Media Cache</h3>
@@ -449,14 +558,18 @@ export async function renderSettingsPanel() {
     pane.querySelector("#set-crash-rec").onchange = (e) =>
       updateSetting("startup_cache_recovery", e.target.checked);
     pane.querySelector("#btn-clear-cache-now").onclick = async () => {
-      const rep = await invokeCmd("stream_cache_clear");
-      showToast(
-        `Cleared ${rep.removed_files} temporary file(s) (${formatBytes(rep.freed_bytes)})${
-          rep.skipped_active_files > 0 ? " — active stream protected" : ""
-        }`,
-        "success"
-      );
-      renderSettingsPanel();
+      try {
+        const rep = await invokeCmd("stream_cache_clear");
+        showToast(
+          `Cleared ${rep.removed_files} temporary file(s) (${formatBytes(rep.freed_bytes)})${
+            rep.skipped_active_files > 0 ? " — active stream protected" : ""
+          }`,
+          "success"
+        );
+        renderSettingsPanel();
+      } catch (e) {
+        showToast(String(e), "error");
+      }
     };
     return;
   }
@@ -503,20 +616,33 @@ export async function renderSettingsPanel() {
     pane.querySelector("#set-hist-en").onchange = (e) =>
       updateSetting("browsing_history_enabled", e.target.checked);
     pane.querySelector("#priv-clear-hist").onclick = async () => {
-      await invokeCmd("history_clear_period", { period: "all" });
-      showToast("Browsing history cleared");
+      try {
+        await invokeCmd("history_clear_period", { period: "all" });
+        store.history = [];
+        showToast("Browsing history cleared");
+      } catch (e) {
+        showToast(String(e), "error");
+      }
     };
     pane.querySelector("#priv-clear-recent").onclick = async () => {
-      await invokeCmd("recent_media_clear");
-      await invokeCmd("playback_position_clear_all");
-      store.recentMedia = [];
-      showToast("Recent Media and resume positions cleared");
+      try {
+        await invokeCmd("recent_media_clear");
+        await invokeCmd("playback_position_clear_all");
+        store.recentMedia = [];
+        showToast("Recent Media and resume positions cleared");
+      } catch (e) {
+        showToast(String(e), "error");
+      }
     };
     pane.querySelector("#priv-clear-all").onclick = async () => {
-      await invokeCmd("privacy_clear_all_data");
-      store.recentMedia = [];
-      store.history = [];
-      showToast("Activity data cleared", "success");
+      try {
+        await invokeCmd("privacy_clear_all_data");
+        store.recentMedia = [];
+        store.history = [];
+        showToast("Activity data cleared", "success");
+      } catch (e) {
+        showToast(String(e), "error");
+      }
     };
     return;
   }
@@ -541,6 +667,7 @@ export async function renderSettingsPanel() {
     try {
       logs = await invokeCmd("get_recent_logs", { limit: 80 });
     } catch (_) {}
+    if (seq !== settingsRenderSeq) return;
     pane.innerHTML = `
       <div class="settings-group">
         <h3>Portable Architecture &amp; Windows Runtime Diagnostics</h3>
@@ -593,6 +720,27 @@ export async function renderSettingsPanel() {
       </div>
 
       <div class="settings-group">
+        <h3>Portable-Safe GitHub Release Update Notifier (v1.1.0)</h3>
+        <p style="font-size:12px;color:var(--text-secondary);margin-top:0;">
+          Checks GitHub Releases on demand without auto-overwriting your files. When upgrading, replace <code>StreamVault.exe</code> (and <code>runtime\\</code> if updated) while keeping your <code>data\\</code> folder intact — your SQLite database and single rolling backup (<code>data\\backups\\streamvault.backup.db</code>) remain 100% preserved.
+        </p>
+
+        <div class="setting-row">
+          <div class="setting-label">
+            <strong>GitHub Repository Slug</strong>
+            <span>Format: <code>owner/StreamVault</code></span>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <input id="set-gh-repo" class="input-field" style="width:230px;" placeholder="owner/StreamVault" value="${escapeHtml(s.github_repo_slug || "")}" />
+            <button id="btn-save-gh-repo" class="btn btn-sm">Save Repo</button>
+            <button id="btn-check-gh-update" class="btn btn-primary btn-sm">Check for Updates</button>
+          </div>
+        </div>
+
+        <div id="gh-update-result-box" style="margin-top:10px;font-size:12.5px;color:var(--text-secondary);"></div>
+      </div>
+
+      <div class="settings-group">
         <h3>Structured Application Logs (<code>data/logs/streamvault.log</code>)</h3>
         <div class="log-viewer">
           ${
@@ -608,5 +756,83 @@ export async function renderSettingsPanel() {
         </div>
       </div>
     `;
+
+    const ghInput = pane.querySelector("#set-gh-repo");
+    const ghResBox = pane.querySelector("#gh-update-result-box");
+
+    const saveGhRepo = () => {
+      updateSetting("github_repo_slug", ghInput.value.trim());
+    };
+    pane.querySelector("#btn-save-gh-repo").onclick = saveGhRepo;
+    ghInput.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        saveGhRepo();
+      }
+    });
+
+    pane.querySelector("#btn-check-gh-update").onclick = async () => {
+      const slug = ghInput.value.trim();
+      if (!slug || !slug.includes("/")) {
+        showToast("Enter your GitHub repository slug first (e.g. owner/StreamVault)", "error");
+        return;
+      }
+      ghResBox.textContent = "Checking GitHub Releases…";
+      try {
+        if (slug !== (s.github_repo_slug || "")) {
+          store.settings = await invokeCmd("settings_update_key", {
+            key: "github_repo_slug",
+            value: slug,
+          });
+        }
+        const check = await invokeCmd("app_check_github_update", {
+          repoSlugOverride: slug,
+        });
+        const badgeHtml = check.update_available
+          ? `<span class="status-pill completed" style="margin-right:8px;">Update Available: v${escapeHtml(
+              check.latest_version || ""
+            )}</span>`
+          : `<span class="status-pill" style="margin-right:8px;">Up to Date (v${escapeHtml(
+              check.current_version
+            )})</span>`;
+        ghResBox.innerHTML = `
+          <div style="padding:10px 12px;border-radius:8px;background:var(--bg-app);border:1px solid var(--border-subtle);display:flex;flex-direction:column;gap:8px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+              <div>${badgeHtml} <strong>${escapeHtml(check.release_name || "")}</strong></div>
+              ${
+                check.release_url
+                  ? `<div style="display:flex;gap:6px;">
+                       <button id="gh-open-rel" class="btn btn-primary btn-sm">Open Release Page</button>
+                       <button id="gh-copy-rel" class="btn btn-sm">Copy URL</button>
+                     </div>`
+                  : ""
+              }
+            </div>
+            ${
+              check.notes_excerpt
+                ? `<div style="font-size:12px;color:var(--text-secondary);white-space:pre-wrap;">${escapeHtml(
+                    check.notes_excerpt
+                  )}</div>`
+                : ""
+            }
+            <div style="font-size:11.5px;color:var(--text-muted);">${escapeHtml(
+              check.portable_upgrade_note
+            )}</div>
+          </div>
+        `;
+        if (check.release_url) {
+          ghResBox.querySelector("#gh-open-rel").onclick = () => {
+            if (switchViewFn) switchViewFn("browser");
+            invokeCmd("tab_create", { url: check.release_url, active: true }).catch(() => {});
+          };
+          ghResBox.querySelector("#gh-copy-rel").onclick = () => {
+            copyTextToClipboard(check.release_url);
+          };
+        }
+      } catch (e) {
+        ghResBox.textContent = `Update check error: ${e}`;
+        showToast(String(e), "error");
+      }
+    };
   }
 }

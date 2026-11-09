@@ -261,3 +261,79 @@ body.player-fullscreen.player-hud-idle .player-transport-bar,
 body.player-fullscreen.player-hud-idle .player-range-banner {
   display: none !important;
 }
+
+/* Playlist Queue Pill */
+.player-queue-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border-radius: 11px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(56, 189, 248, 0.14);
+  border: 1px solid rgba(56, 189, 248, 0.42);
+  color: #7dd3fc;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.player-queue-pill:hover {
+  background: rgba(56, 189, 248, 0.24);
+}
+
+/* MKV Chapter Markers on Timeline */
+.timeline-chapter-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.timeline-chapter-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: rgba(250, 204, 21, 0.92);
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.85);
+  transform: translateX(-1px);
+}
+
+.player-btn:disabled {
+  opacity: 0.36;
+  cursor: default;
+  pointer-events: none;
+}
+
+.player-btn.active-toggle {
+  background: rgba(56, 189, 248, 0.18);
+  border-color: rgba(56, 189, 248, 0.55);
+  color: #7dd3fc;
+}
+
+/* Global Drag-and-Drop Overlay */
+.global-drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  background: rgba(8, 12, 22, 0.82);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.global-drop-card {
+  padding: 32px 44px;
+  border-radius: 16px;
+  border: 2px dashed #38bdf8;
+  background: #111827;
+  box-shadow: 0 22px 50px rgba(0, 0, 0, 0.7);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+}
+
