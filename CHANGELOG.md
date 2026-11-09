@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [1.0.0] - 2026-11-08
+## [0.9.0] - 2026-11-08
 
 ### Added
 - **Portable Architecture (`streamvault-core/portable.rs`)**: 100% self-contained folder layout (`data/{database,settings,cache/media,downloads,logs,backups,webview2}`) with startup write-permission checks, free-space diagnostics, and zero `%APPDATA%` pollution.
