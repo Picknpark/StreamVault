@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>StreamVault</title>
+  <link rel="stylesheet" href="css/variables.css" />
+  <link rel="stylesheet" href="css/layout.css" />
+  <link rel="stylesheet" href="css/browser.css" />
+  <link rel="stylesheet" href="css/player.css" />
+  <link rel="stylesheet" href="css/panels.css" />
+</head>
+<body>
+  <div id="app-shell">
+    <!-- Collapsible Sidebar Navigation -->
+    <aside id="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-title-wrap">
+          <span class="brand-mark">▶</span>
+          <span class="brand-name">StreamVault</span>
+        </div>
+        <button id="btn-toggle-sidebar" class="icon-btn" title="Toggle Sidebar">☰</button>
+      </div>
+
+      <nav class="sidebar-nav" aria-label="Main Navigation">
+        <button class="nav-item active" data-view="home" title="Home">
+          <span class="nav-icon">⌂</span>
+          <span class="nav-label">Home</span>
+        </button>
+        <button class="nav-item" data-view="browser" title="Web & LAN Browser">
+          <span class="nav-icon">🌐</span>
+          <span class="nav-label">Browser</span>
+          <span id="nav-tab-badge" class="nav-badge hidden">1</span>
+        </button>
+        <button class="nav-item" data-view="player" title="Built-in Media Player">
+          <span class="nav-icon">▶</span>
+          <span class="nav-label">Media Player</span>
+          <span id="nav-playing-badge" class="nav-badge hidden">LIVE</span>
+        </button>
+        <button class="nav-item" data-view="recent" title="Recent Media">
+          <span class="nav-icon">⏱</span>
+          <span class="nav-label">Recent Media</span>
+        </button>
+        <button class="nav-item" data-view="bookmarks" title="Bookmarks">
+          <span class="nav-icon">★</span>
+          <span class="nav-label">Bookmarks</span>
+        </button>
+        <button class="nav-item" data-view="history" title="Browsing History">
+          <span class="nav-icon">🕘</span>
+          <span class="nav-label">History</span>
+        </button>
+        <button class="nav-item" data-view="downloads" title="Permanent Downloads">
+          <span class="nav-icon">⬇</span>
+          <span class="nav-label">Downloads</span>
+          <span id="nav-dl-badge" class="nav-badge hidden">0</span>
+        </button>
+        <button class="nav-item" data-view="settings" title="Settings">
+          <span class="nav-icon">⚙</span>
+          <span class="nav-label">Settings</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div id="sidebar-net-monitor" class="net-speed-monitor" title="Live Network Speed — Download / Upload">
+          <span class="net-speed-col">
+            <span class="net-arrow net-arrow-down">↓</span>
+            <span id="net-speed-down" class="net-speed-val">0 KB/s</span>
+          </span>
+          <span class="net-speed-divider"></span>
+          <span class="net-speed-col">
+            <span class="net-arrow net-arrow-up">↑</span>
+            <span id="net-speed-up" class="net-speed-val">0 KB/s</span>
+          </span>
+        </div>
+        <div class="portable-pill" title="100% Portable Mode — All database, cache, and settings stay inside the StreamVault folder">
+          <span class="status-dot"></span>
+          <span class="sidebar-footer-text">Portable Mode Active</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Workspace -->
+    <main id="workspace-main">
+      <!-- 1. HOME VIEW -->
+      <section id="view-home" class="view-panel">
+        <div class="panel-scroll">
+          <div class="home-hero">
+            <h2>StreamVault</h2>
+            <p>Portable Web Browser, Local-Network Media Browser &amp; Advanced Streaming Player</p>
+            <form id="home-search-form" class="home-omnibox">
+              <input
+                id="home-omnibox-input"
+                class="input-field"
+                type="text"
+                placeholder="Enter URL, local media server IP (e.g. http://172.16.50.12/), direct MKV/MP4 link, or search..."
+                autocomplete="off"
+              />
+              <button type="submit" class="btn btn-primary">Open</button>
+            </form>
+          </div>
+
+          <div class="home-grid-sections">
+            <div class="section-card">
+              <div class="section-card-hdr">
+                <h3>Continue Watching (Recent Media)</h3>
+                <button class="btn btn-sm" data-goto-view="recent">View All</button>
+              </div>
+              <div id="home-recent-media-list"></div>
+            </div>
+
+            <div class="section-card">
+              <div class="section-card-hdr">
+                <h3>Bookmarks</h3>
+                <button class="btn btn-sm" data-goto-view="bookmarks">Manage</button>
+              </div>
+              <div id="home-bookmarks-list"></div>
+            </div>
+
+            <div class="section-card">
+              <div class="section-card-hdr">
+                <h3>Recently Visited Pages</h3>
+                <button class="btn btn-sm" data-goto-view="history">History</button>
+              </div>
+              <div id="home-history-list"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. BROWSER VIEW -->
+      <section id="view-browser" class="view-panel hidden">
+        <!-- Tab Bar -->
+        <div class="tab-strip-bar">
+          <div id="browser-tabs-list" class="tabs-list"></div>
+          <button id="btn-new-tab" class="icon-btn" title="New Tab (Ctrl+T)">＋</button>
+        </div>
+
+        <!-- Navigation Toolbar -->
+        <div class="browser-toolbar">
+          <button id="btn-nav-back" class="icon-btn" title="Back (Alt+Left)">←</button>
+          <button id="btn-nav-forward" class="icon-btn" title="Forward (Alt+Right)">→</button>
+          <button id="btn-nav-reload" class="icon-btn" title="Reload (Ctrl+R)">↻</button>
+          <button id="btn-nav-home" class="icon-btn" title="Home">⌂</button>
+
+          <div class="address-bar-container">
+            <form id="address-bar-form" class="address-input-shell">
+              <span id="address-protocol-badge" class="protocol-badge">HTTP</span>
+              <input
+                id="address-input"
+                type="text"
+                placeholder="Enter URL, IP address, media link, or search..."
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <span id="toolbar-active-media-pill" class="active-media-toolbar-pill hidden" title="Jump to Active Media">
+                ▶ Playing
+              </span>
+            </form>
+            <div id="address-suggestions" class="address-suggestions hidden"></div>
+          </div>
+
+          <button id="btn-bookmark-star" class="icon-btn star-btn" title="Bookmark Current Page (Ctrl+D)">☆</button>
+          <button id="btn-inspect-url-media" class="icon-btn" title="Play or Download URL as Media">🎬</button>
+          <button id="btn-browser-menu" class="icon-btn" title="Browser Menu">⋮</button>
+          <div id="browser-loading-line" class="nav-progress-line hidden"></div>
+        </div>
+
+        <!-- Bookmark Bar -->
+        <div id="browser-bookmark-bar" class="bookmark-bar"></div>
+
+        <!-- Detected Media Action Bar -->
+        <div id="media-detected-banner" class="media-detected-bar hidden">
+          <div class="media-detected-info">
+            <span id="detected-media-badge" class="media-badge">MKV VIDEO</span>
+            <span id="detected-media-name" class="media-detected-name"></span>
+            <span id="detected-media-meta" class="media-detected-meta"></span>
+          </div>
+          <div class="media-detected-actions">
+            <button id="btn-detected-play-app" class="btn btn-primary btn-sm">▶ Play in StreamVault</button>
+            <button id="btn-detected-play-ext" class="btn btn-accent btn-sm">↗ External Player</button>
+            <button id="btn-detected-download" class="btn btn-sm">⬇ Download Media</button>
+            <button id="btn-detected-copy" class="btn btn-sm">⧉ Copy URL</button>
+            <button id="btn-detected-dismiss" class="icon-btn" title="Dismiss">✕</button>
+          </div>
+        </div>
+
+        <!-- Native Child WebView2 Viewport Anchor -->
+        <div id="browser-webview-Slot">
+          <div class="webview-placeholder-note">
+            WebView2 Browser Surface Ready
+          </div>
+        </div>
+      </section>
+
+      <!-- 3. BUILT-IN ADVANCED MEDIA PLAYER VIEW -->
+      <section id="view-player" class="view-panel hidden">
+        <div class="player-top-bar">
+          <div class="player-title-group">
+            <button id="btn-player-back-browser" class="player-btn" title="Return to Browser (Playback continues or pauses)">
+              ← Browser
+            </button>
+            <span id="player-title-text" class="player-media-title">No Media Loaded</span>
+          </div>
+          <div class="transport-right">
+            <span id="player-cache-pill" class="stream-cache-pill hidden">Cache: 0%</span>
+            <button id="btn-player-open-url-prompt" class="player-btn" title="Open Direct Stream URL">🔗 Open URL</button>
+            <button id="btn-player-handoff-ext" class="player-btn" title="Open Current Media in External Player">↗ External</button>
+            <button id="btn-player-save-perm" class="player-btn" title="Download Media Permanently (Save As)">⬇ Save File</button>
+          </div>
+        </div>
+
+        <div id="player-range-notice" class="player-range-banner hidden">
+          <span id="player-range-notice-text"></span>
+        </div>
+
+        <!-- Hardware Accelerated libmpv Surface -->
+        <div id="player-video-canvas">
+          <div id="player-empty-overlay" class="player-canvas-overlay-info">
+            <div class="player-audio-card">
+              <div style="font-size:28px;color:#38bdf8;margin-bottom:8px;">▶</div>
+              <div id="player-overlay-heading" style="font-weight:600;color:#f1f5f9;margin-bottom:6px;">
+                StreamVault Built-in Media Engine (libmpv)
+              </div>
+              <div id="player-overlay-sub" style="font-size:12.5px;color:#94a3b8;">
+                Open any MKV, MP4, AVI, WEBM, MP3, FLAC, or HTTP network stream from the Browser, Recent Media, or click "Open URL".
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Professional Transport Controls -->
+        <div class="player-transport-bar">
+          <div class="timeline-row">
+            <span id="player-time-current" class="time-readout">00:00</span>
+            <div id="player-timeline" class="timeline-track">
+              <div class="timeline-rail">
+                <div id="player-buffer-layer" class="timeline-buffer-layer"></div>
+                <div id="player-timeline-played" class="timeline-played"></div>
+              </div>
+              <div id="player-timeline-tip" class="timeline-hover-tip hidden">00:00</div>
+            </div>
+            <span id="player-time-total" class="time-readout right">00:00</span>
+          </div>
+
+          <div class="transport-controls-row">
+            <div class="transport-left">
+              <button id="btn-player-play" class="player-btn primary" title="Play / Pause (Space)">▶ Play</button>
+              <button id="btn-player-stop" class="player-btn" title="Stop">■</button>
+              <button id="btn-player-seek-back" class="player-btn" title="Seek Backward (Left Arrow)">⟲ 10s</button>
+              <button id="btn-player-seek-fwd" class="player-btn" title="Seek Forward (Right Arrow)">10s ⟳</button>
+
+              <div class="volume-group">
+                <button id="btn-player-mute" class="player-btn" title="Mute / Unmute (M)">🔊</button>
+                <input id="player-volume-slider" type="range" min="0" max="150" value="100" title="Volume (Mouse Wheel / Up & Down)" />
+                <span id="player-volume-label" class="time-readout" style="min-width:38px;">100%</span>
+              </div>
+            </div>
+
+            <div class="transport-right">
+              <select id="player-speed-select" class="player-select" title="Playback Speed ([ and ])">
+                <option value="0.25">0.25x</option>
+                <option value="0.5">0.5x</option>
+                <option value="0.75">0.75x</option>
+                <option value="1" selected>1.0x</option>
+                <option value="1.25">1.25x</option>
+                <option value="1.5">1.5x</option>
+                <option value="1.75">1.75x</option>
+                <option value="2">2.0x</option>
+                <option value="2.5">2.5x</option>
+                <option value="3">3.0x</option>
+              </select>
+
+              <select id="player-audio-select" class="player-select" title="Audio Track">
+                <option value="">Audio: Auto</option>
+              </select>
+
+              <select id="player-sub-select" class="player-select" title="Subtitles">
+                <option value="off">Subtitles: Off</option>
+              </select>
+              <button id="btn-player-load-sub" class="player-btn" title="Load External Subtitle (.srt / .ass)">+Sub</button>
+
+              <select id="player-aspect-select" class="player-select" title="Aspect Ratio">
+                <option value="auto">Aspect: Auto</option>
+                <option value="16:9">16:9</option>
+                <option value="4:3">4:3</option>
+                <option value="21:9">21:9</option>
+                <option value="2.35:1">2.35:1</option>
+                <option value="1:1">1:1</option>
+                <option value="stretch">Stretch</option>
+              </select>
+
+              <button id="btn-player-pip" class="player-btn" title="Picture-in-Picture Floating Window">⧉ PiP</button>
+              <button id="btn-player-fullscreen" class="player-btn" title="Fullscreen (F / Double-Click)">⛶</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 4. RECENT MEDIA VIEW (Strictly Separate from Bookmarks!) -->
+      <section id="view-recent" class="view-panel hidden">
+        <div class="panel-scroll">
+          <div class="panel-header">
+            <div class="panel-title-block">
+              <h1>Recent Media</h1>
+              <p>Automatically recorded media streams and playback positions — independent of Bookmarks.</p>
+            </div>
+            <div class="panel-toolbar">
+              <div class="view-mode-toggle" role="group" aria-label="Recent Media View Mode">
+                <button type="button" id="btn-recent-view-grid" class="view-mode-btn active" data-view-mode="grid" title="Grid View">⊞ Grid</button>
+                <button type="button" id="btn-recent-view-list" class="view-mode-btn" data-view-mode="list" title="List View">☰ List</button>
+              </div>
+              <input id="recent-search-input" class="input-field" type="text" placeholder="Filter recent media..." />
+              <button id="btn-clear-recent-media" class="btn btn-danger">Clear All Recent Media</button>
+            </div>
+          </div>
+          <div id="recent-media-container" class="media-grid"></div>
+        </div>
+      </section>
+
+      <!-- 5. BOOKMARKS MANAGER VIEW -->
+      <section id="view-bookmarks" class="view-panel hidden">
+        <div class="panel-scroll">
+          <div class="panel-header">
+            <div class="panel-title-block">
+              <h1>Bookmark Manager</h1>
+              <p>Manually saved webpages and folders — persisted in portable SQLite.</p>
+            </div>
+            <div class="panel-toolbar">
+              <input id="bookmarks-search-input" class="input-field" type="text" placeholder="Search bookmarks..." />
+              <button id="btn-new-bm-folder" class="btn">+ New Folder</button>
+              <button id="btn-new-bookmark" class="btn btn-primary">+ Add Bookmark</button>
+            </div>
+          </div>
+
+          <div class="bookmarks-layout">
+            <div class="folder-sidebar" id="bookmark-folders-pane"></div>
+            <div id="bookmarks-items-pane"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 6. BROWSING HISTORY VIEW -->
+      <section id="view-history" class="view-panel hidden">
+        <div class="panel-scroll">
+          <div class="panel-header">
+            <div class="panel-title-block">
+              <h1>Browsing History</h1>
+              <p>Visited webpages with search and time-range clearing.</p>
+            </div>
+            <div class="panel-toolbar">
+              <input id="history-search-input" class="input-field" type="text" placeholder="Search history..." />
+              <select id="history-clear-period-select" class="select-field">
+                <option value="1h">Last hour</option>
+                <option value="24h">Last 24 hours</option>
+                <option value="7d">Last 7 days</option>
+                <option value="30d">Last 30 days</option>
+                <option value="all">All time</option>
+              </select>
+              <button id="btn-clear-history-period" class="btn btn-danger">Clear Selected Range</button>
+            </div>
+          </div>
+          <div id="history-list-container"></div>
+        </div>
+      </section>
+
+      <!-- 7. PERMANENT DOWNLOAD MANAGER VIEW -->
+      <section id="view-downloads" class="view-panel hidden">
+        <div class="panel-scroll">
+          <div class="panel-header">
+            <div class="panel-title-block">
+              <h1>Download Manager</h1>
+              <p>Permanent media downloads with original server filenames and HTTP Range pause/resume — independent of streaming cache.</p>
+            </div>
+            <div class="panel-toolbar">
+              <input id="direct-dl-url-input" class="input-field" style="width:280px;" type="text" placeholder="Paste direct media URL to download..." />
+              <button id="btn-start-direct-dl" class="btn btn-primary">⬇ Download Media</button>
+              <button id="btn-clear-completed-dl" class="btn">Clear Completed</button>
+            </div>
+          </div>
+          <div id="downloads-list-container"></div>
+        </div>
+      </section>
+
+      <!-- 8. SETTINGS VIEW -->
+      <section id="view-settings" class="view-panel hidden">
+        <div class="panel-scroll">
+          <div class="panel-header">
+            <div class="panel-title-block">
+              <h1>Settings</h1>
+              <p>All preferences are stored inside your portable StreamVault folder.</p>
+            </div>
+          </div>
+
+          <div class="settings-layout">
+            <div class="settings-tabs" id="settings-category-tabs">
+              <button class="settings-tab-btn active" data-stab="general">General</button>
+              <button class="settings-tab-btn" data-stab="media">Media &amp; External Players</button>
+              <button class="settings-tab-btn" data-stab="downloads">Downloads</button>
+              <button class="settings-tab-btn" data-stab="cache">Temporary Cache</button>
+              <button class="settings-tab-btn" data-stab="privacy">Privacy</button>
+              <button class="settings-tab-btn" data-stab="diagnostics">Portability &amp; Runtime</button>
+            </div>
+            <div id="settings-content-pane"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Global Modal Host (Resume Dialog, External Player Picker, Bookmark Editor, Browser Menu) -->
+  <div id="modal-root" class="modal-backdrop hidden"></div>
+
+  <!-- Toast Notifications -->
+  <div id="toast-container"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
