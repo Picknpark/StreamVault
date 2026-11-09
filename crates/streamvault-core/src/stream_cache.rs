@@ -585,20 +585,19 @@ impl StreamCacheEngine {
                     if session.cancelled.load(Ordering::Relaxed) {
                         break 'outer;
                     }
-                    let mut req = client
-                        .get(&session.original_url)
-                        .timeout(Duration::from_secs(600));
+                    let mut req = client.get(&session.original_url);
                     if supports_range && target_offset > 0 {
                         req = req.header(RANGE, format!("bytes={target_offset}-"));
                     } else if target_offset == 0 && supports_range {
                         req = req.header(RANGE, "bytes=0-");
                     }
 
-                    match req.send().await {
-                        Ok(r) if r.status().is_success() || r.status() == reqwest::StatusCode::PARTIAL_CONTENT => {
+                    let send_res = tokio::time::timeout(Duration::from_secs(20), req.send()).await;
+                    match send_res {
+                        Ok(Ok(r)) if r.status().is_success() || r.status() == reqwest::StatusCode::PARTIAL_CONTENT => {
                             break r;
                         }
-                        Ok(r) => {
+                        Ok(Ok(r)) => {
                             retries += 1;
                             let msg = format!("Upstream HTTP {}", r.status());
                             *session.last_error.write() = Some(msg.clone());
@@ -615,7 +614,7 @@ impl StreamCacheEngine {
                             *session.network_state.write() = "retrying".to_string();
                             tokio::time::sleep(Duration::from_millis(300 * (1 << retries.min(4)))).await;
                         }
-                        Err(err) => {
+                        Ok(Err(err)) => {
                             retries += 1;
                             *session.last_error.write() = Some(err.to_string());
                             if retries > 6 {
@@ -624,6 +623,22 @@ impl StreamCacheEngine {
                                     "stream_cache",
                                     "Upstream network connection failed after retries",
                                     serde_json::json!({ "url": session.original_url, "error": err.to_string() }),
+                                );
+                                session.notify.notify_waiters();
+                                break 'outer;
+                            }
+                            *session.network_state.write() = "retrying".to_string();
+                            tokio::time::sleep(Duration::from_millis(350 * (1 << retries.min(4)))).await;
+                        }
+                        Err(_) => {
+                            retries += 1;
+                            *session.last_error.write() = Some("Upstream connection timed out".to_string());
+                            if retries > 6 {
+                                *session.network_state.write() = "error".to_string();
+                                logger.error_ctx(
+                                    "stream_cache",
+                                    "Upstream network connection timed out after retries",
+                                    serde_json::json!({ "url": session.original_url }),
                                 );
                                 session.notify.notify_waiters();
                                 break 'outer;
@@ -690,9 +705,9 @@ impl StreamCacheEngine {
                                 }
                             }
                         }
-                        chunk_res = stream.next() => {
-                            match chunk_res {
-                                Some(Ok(chunk)) => {
+                        chunk_timed = tokio::time::timeout(Duration::from_secs(30), stream.next()) => {
+                            match chunk_timed {
+                                Ok(Some(Ok(chunk))) => {
                                     if let Err(io_err) = session.write_chunk_at(write_cursor, &chunk) {
                                         *session.last_error.write() = Some(format!("Disk cache write error: {io_err}"));
                                         *session.network_state.write() = "error".to_string();
@@ -709,7 +724,7 @@ impl StreamCacheEngine {
                                         speed_window_start = Instant::now();
                                     }
                                 }
-                                Some(Err(net_err)) => {
+                                Ok(Some(Err(net_err))) => {
                                     // Transient network interruption: resume seamlessly from `write_cursor`!
                                     *session.last_error.write() = Some(net_err.to_string());
                                     *session.network_state.write() = "retrying".to_string();
@@ -717,7 +732,15 @@ impl StreamCacheEngine {
                                     tokio::time::sleep(Duration::from_millis(400)).await;
                                     continue 'outer;
                                 }
-                                None => {
+                                Err(_) => {
+                                    // Read stall: reconnect via Range from `write_cursor`
+                                    *session.last_error.write() = Some("Stream read stalled; reconnecting".to_string());
+                                    *session.network_state.write() = "retrying".to_string();
+                                    target_offset = write_cursor;
+                                    tokio::time::sleep(Duration::from_millis(300)).await;
+                                    continue 'outer;
+                                }
+                                Ok(None) => {
                                     if session.total_bytes.read().is_none() && write_cursor > 0 {
                                         *session.total_bytes.write() = Some(write_cursor);
                                     }
@@ -984,7 +1007,11 @@ fn parse_http_byte_range(header: &str, total_bytes: Option<u64>) -> Option<(u64,
     let end_opt = if end_s.trim().is_empty() {
         None
     } else {
-        Some(end_s.trim().parse::<u64>().ok()?)
+        let end = end_s.trim().parse::<u64>().ok()?;
+        if end < start {
+            return None;
+        }
+        Some(end)
     };
     Some((start, end_opt))
 }

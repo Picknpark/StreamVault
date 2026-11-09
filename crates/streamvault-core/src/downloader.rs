@@ -17,7 +17,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 #[cfg(not(windows))]
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
@@ -36,6 +36,8 @@ pub struct SaveAsSuggestion {
 struct ActiveDownloadControl {
     pause_requested: AtomicBool,
     cancel_requested: AtomicBool,
+    removed: AtomicBool,
+    shutdown_requested: AtomicBool,
     speed_bps: AtomicU64,
     live_bytes: AtomicU64,
 }
@@ -47,6 +49,7 @@ pub struct DownloadManager {
     client: reqwest::Client,
     logger: StructuredLogger,
     active_controls: Arc<RwLock<HashMap<String, Arc<ActiveDownloadControl>>>>,
+    running_transfers: Arc<AtomicUsize>,
 }
 
 impl DownloadManager {
@@ -62,6 +65,7 @@ impl DownloadManager {
             client,
             logger,
             active_controls: Arc::new(RwLock::new(HashMap::new())),
+            running_transfers: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -225,6 +229,94 @@ impl DownloadManager {
         Ok(self.get_download(&id)?.unwrap_or(rec))
     }
 
+    /// Enqueues multiple URLs into a single destination directory instantaneously for Batch Media Grabber.
+    /// Individual workers honor `max_concurrent_downloads` and discover exact `Content-Length` / `ETag`
+    /// headers when each slot starts downloading.
+    pub fn enqueue_batch_downloads(
+        &self,
+        urls: Vec<String>,
+        requested_dir: Option<PathBuf>,
+    ) -> Result<Vec<DownloadRecord>> {
+        let settings = self.db.get_settings()?;
+        let base_dir = match requested_dir {
+            Some(d) => d,
+            None => self.paths.resolve_portable_path(&settings.default_download_dir),
+        };
+        fs::create_dir_all(&base_dir).with_context(|| {
+            format!(
+                "Cannot create or access batch download directory: {}",
+                base_dir.display()
+            )
+        })?;
+
+        let write_probe = base_dir.join(format!(".sv_batch_probe_{}", Uuid::new_v4().simple()));
+        fs::write(&write_probe, b"ok").with_context(|| {
+            format!(
+                "Batch download directory is not writable: {}",
+                base_dir.display()
+            )
+        })?;
+        let _ = fs::remove_file(&write_probe);
+
+        let mut created = Vec::new();
+        let mut seen_urls = std::collections::HashSet::new();
+
+        for raw_url in urls {
+            let Ok(preserved) = preserve_or_sanitize_http_url(&raw_url) else {
+                continue;
+            };
+            if !seen_urls.insert(preserved.clone()) {
+                continue;
+            }
+
+            let quick = crate::media_detect::detect_media_from_url_only(&preserved);
+            let raw_name = if quick.suggested_filename.trim().is_empty() {
+                extract_server_filename(&preserved, None, quick.mime_type.as_deref())
+            } else {
+                quick.suggested_filename
+            };
+            let clean_name = sanitize_windows_filename(&raw_name);
+            let candidate_dest = base_dir.join(&clean_name);
+            let final_dest = resolve_non_colliding_destination(&candidate_dest);
+            let final_filename = final_dest
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or(clean_name);
+            let temp_part = PathBuf::from(format!("{}.svpart", final_dest.display()));
+
+            // Reserve `.svpart` placeholder immediately so sibling episodes in the same batch never collide
+            let _ = OpenOptions::new().create(true).write(true).open(&temp_part);
+
+            let id = Uuid::new_v4().to_string();
+            let now = Utc::now().timestamp_millis();
+            let rec = DownloadRecord {
+                id: id.clone(),
+                filename: final_filename,
+                original_url: preserved,
+                destination_path: self.paths.to_portable_string(&final_dest),
+                temp_part_path: self.paths.to_portable_string(&temp_part),
+                mime_type: quick.mime_type,
+                downloaded_bytes: 0,
+                total_bytes: None,
+                supports_range: true,
+                etag: None,
+                last_modified: None,
+                status: "queued".to_string(),
+                error_message: None,
+                created_at: now,
+                updated_at: now,
+                completed_at: None,
+                speed_bps: 0,
+            };
+
+            self.db.upsert_download_record(&rec)?;
+            self.spawn_transfer_worker(id.clone(), false)?;
+            created.push(rec);
+        }
+
+        Ok(created)
+    }
+
     pub fn pause_download(&self, id: &str) -> Result<DownloadRecord> {
         if let Some(ctrl) = self.active_controls.read().get(id).cloned() {
             ctrl.pause_requested.store(true, Ordering::SeqCst);
@@ -291,6 +383,7 @@ impl DownloadManager {
 
     pub fn remove_download_entry(&self, id: &str) -> Result<()> {
         if let Some(ctrl) = self.active_controls.read().get(id).cloned() {
+            ctrl.removed.store(true, Ordering::SeqCst);
             ctrl.cancel_requested.store(true, Ordering::SeqCst);
         }
         if let Some(rec) = self.db.get_download_record(id)? {
@@ -300,6 +393,33 @@ impl DownloadManager {
             }
         }
         self.db.delete_download_record(id)
+    }
+
+    pub fn shutdown_active_transfers(&self) {
+        let ctrls: Vec<(String, Arc<ActiveDownloadControl>)> = self
+            .active_controls
+            .read()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        for (id, ctrl) in &ctrls {
+            ctrl.shutdown_requested.store(true, Ordering::SeqCst);
+            let live = ctrl.live_bytes.load(Ordering::Relaxed);
+            if let Ok(Some(mut rec)) = self.db.get_download_record(id) {
+                if rec.status == "downloading" || rec.status == "queued" {
+                    if live > rec.downloaded_bytes {
+                        rec.downloaded_bytes = live;
+                    }
+                    rec.status = "interrupted".to_string();
+                    rec.error_message = Some(
+                        "Application exited before download completed; click Resume to continue."
+                            .to_string(),
+                    );
+                    rec.updated_at = Utc::now().timestamp_millis();
+                    let _ = self.db.upsert_download_record(&rec);
+                }
+            }
+        }
     }
 
     pub fn list_downloads_with_live_progress(&self) -> Result<Vec<DownloadRecord>> {
@@ -365,6 +485,8 @@ impl DownloadManager {
         let ctrl = Arc::new(ActiveDownloadControl {
             pause_requested: AtomicBool::new(false),
             cancel_requested: AtomicBool::new(false),
+            removed: AtomicBool::new(false),
+            shutdown_requested: AtomicBool::new(false),
             speed_bps: AtomicU64::new(0),
             live_bytes: AtomicU64::new(0),
         });
@@ -375,13 +497,19 @@ impl DownloadManager {
             let outcome = mgr.execute_transfer(&id, try_resume, &ctrl).await;
             mgr.active_controls.write().remove(&id);
             if let Err(err) = outcome {
+                if ctrl.removed.load(Ordering::SeqCst) {
+                    return;
+                }
                 mgr.logger.error_ctx(
                     "downloader",
                     "Permanent media download failed",
                     serde_json::json!({ "id": id, "error": err.to_string() }),
                 );
                 if let Ok(Some(mut rec)) = mgr.db.get_download_record(&id) {
-                    if rec.status != "paused" && rec.status != "cancelled" {
+                    if rec.status != "paused"
+                        && rec.status != "cancelled"
+                        && rec.status != "interrupted"
+                    {
                         rec.status = "failed".to_string();
                         rec.error_message = Some(err.to_string());
                         rec.updated_at = Utc::now().timestamp_millis();
@@ -411,6 +539,62 @@ impl DownloadManager {
             fs::create_dir_all(parent)?;
         }
 
+        // Wait in "queued" state until an active concurrency slot (`max_concurrent_downloads`) is free!
+        loop {
+            if ctrl.removed.load(Ordering::Relaxed) {
+                let _ = fs::remove_file(&part_path);
+                return Ok(());
+            }
+            if ctrl.cancel_requested.load(Ordering::Relaxed) {
+                let _ = fs::remove_file(&part_path);
+                if !ctrl.removed.load(Ordering::SeqCst) {
+                    rec.status = "cancelled".to_string();
+                    rec.downloaded_bytes = 0;
+                    rec.updated_at = Utc::now().timestamp_millis();
+                    self.db.upsert_download_record(&rec)?;
+                }
+                return Ok(());
+            }
+            if ctrl.shutdown_requested.load(Ordering::Relaxed) {
+                rec.status = "interrupted".to_string();
+                rec.updated_at = Utc::now().timestamp_millis();
+                let _ = self.db.upsert_download_record(&rec);
+                return Ok(());
+            }
+            if ctrl.pause_requested.load(Ordering::Relaxed) {
+                rec.status = "paused".to_string();
+                rec.updated_at = Utc::now().timestamp_millis();
+                self.db.upsert_download_record(&rec)?;
+                return Ok(());
+            }
+
+            let max_conc = self
+                .db
+                .get_settings()
+                .map(|s| s.max_concurrent_downloads.clamp(1, 16))
+                .unwrap_or(3);
+            let curr = self.running_transfers.load(Ordering::SeqCst);
+            if curr < max_conc {
+                if self
+                    .running_transfers
+                    .compare_exchange(curr, curr + 1, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+                {
+                    break;
+                }
+            } else {
+                tokio::time::sleep(Duration::from_millis(120)).await;
+            }
+        }
+
+        struct RunningSlotGuard(Arc<AtomicUsize>);
+        impl Drop for RunningSlotGuard {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+        let _slot_guard = RunningSlotGuard(self.running_transfers.clone());
+
         let mut existing_offset: u64 = 0;
         if try_resume && part_path.is_file() {
             existing_offset = fs::metadata(&part_path)?.len();
@@ -423,10 +607,7 @@ impl DownloadManager {
         rec.updated_at = Utc::now().timestamp_millis();
         self.db.upsert_download_record(&rec)?;
 
-        let mut req = self
-            .client
-            .get(&rec.original_url)
-            .timeout(Duration::from_secs(3600));
+        let mut req = self.client.get(&rec.original_url);
         if existing_offset > 0 {
             req = req.header(RANGE, format!("bytes={existing_offset}-"));
             if let Some(ref etag) = rec.etag {
@@ -434,9 +615,9 @@ impl DownloadManager {
             }
         }
 
-        let resp = req
-            .send()
+        let resp = tokio::time::timeout(Duration::from_secs(30), req.send())
             .await
+            .context("Timed out connecting to media server for permanent download")?
             .context("Failed connecting to media server for permanent download")?;
 
         let status = resp.status();
@@ -502,15 +683,44 @@ impl DownloadManager {
         let mut last_db_sync = Instant::now();
         let mut speed_bytes = 0u64;
         let mut speed_timer = Instant::now();
+        let mut throttle_limit_kbps = self
+            .db
+            .get_settings()
+            .map(|s| s.download_speed_limit_kbps)
+            .unwrap_or(0);
+        let mut throttle_window_bytes = 0u64;
+        let mut throttle_window_start = Instant::now();
 
-        while let Some(chunk_res) = stream.next().await {
+        loop {
+            if ctrl.removed.load(Ordering::Relaxed) {
+                drop(file);
+                let _ = fs::remove_file(&part_path);
+                return Ok(());
+            }
+
             if ctrl.cancel_requested.load(Ordering::Relaxed) {
                 drop(file);
                 let _ = fs::remove_file(&part_path);
-                rec.status = "cancelled".to_string();
-                rec.downloaded_bytes = 0;
+                if !ctrl.removed.load(Ordering::SeqCst) {
+                    rec.status = "cancelled".to_string();
+                    rec.downloaded_bytes = 0;
+                    rec.updated_at = Utc::now().timestamp_millis();
+                    self.db.upsert_download_record(&rec)?;
+                }
+                return Ok(());
+            }
+
+            if ctrl.shutdown_requested.load(Ordering::Relaxed) {
+                let _ = file.flush();
+                drop(file);
+                rec.status = "interrupted".to_string();
+                rec.downloaded_bytes = downloaded;
+                rec.error_message = Some(
+                    "Application exited before download completed; click Resume to continue."
+                        .to_string(),
+                );
                 rec.updated_at = Utc::now().timestamp_millis();
-                self.db.upsert_download_record(&rec)?;
+                let _ = self.db.upsert_download_record(&rec);
                 return Ok(());
             }
 
@@ -529,6 +739,12 @@ impl DownloadManager {
                 return Ok(());
             }
 
+            let next_chunk = tokio::time::timeout(Duration::from_secs(45), stream.next())
+                .await
+                .context("Media server stalled during permanent download")?;
+            let Some(chunk_res) = next_chunk else {
+                break;
+            };
             let chunk = chunk_res.context("Network interrupted during permanent download")?;
             file.write_all(&chunk)
                 .context("Failed writing to permanent download file (check disk space)")?;
@@ -536,6 +752,24 @@ impl DownloadManager {
             downloaded += chunk.len() as u64;
             ctrl.live_bytes.store(downloaded, Ordering::Relaxed);
             speed_bytes += chunk.len() as u64;
+            throttle_window_bytes += chunk.len() as u64;
+
+            if throttle_limit_kbps > 0 {
+                let target_bps = (throttle_limit_kbps as f64) * 1024.0;
+                let expected_secs = (throttle_window_bytes as f64) / target_bps;
+                let actual_secs = throttle_window_start.elapsed().as_secs_f64();
+                if expected_secs > actual_secs {
+                    let sleep_dur =
+                        Duration::from_secs_f64((expected_secs - actual_secs).min(0.45));
+                    if sleep_dur >= Duration::from_millis(8) {
+                        tokio::time::sleep(sleep_dur).await;
+                    }
+                }
+                if throttle_window_start.elapsed() >= Duration::from_millis(800) {
+                    throttle_window_bytes = 0;
+                    throttle_window_start = Instant::now();
+                }
+            }
 
             let speed_elapsed = speed_timer.elapsed();
             if speed_elapsed >= Duration::from_millis(400) {
@@ -546,11 +780,28 @@ impl DownloadManager {
             }
 
             if last_db_sync.elapsed() >= Duration::from_millis(750) {
-                rec.downloaded_bytes = downloaded;
-                rec.updated_at = Utc::now().timestamp_millis();
-                let _ = self.db.upsert_download_record(&rec);
+                if !ctrl.removed.load(Ordering::Relaxed) {
+                    rec.downloaded_bytes = downloaded;
+                    rec.updated_at = Utc::now().timestamp_millis();
+                    let _ = self.db.upsert_download_record(&rec);
+                }
+                if let Ok(s) = self.db.get_settings() {
+                    throttle_limit_kbps = s.download_speed_limit_kbps;
+                }
                 last_db_sync = Instant::now();
             }
+        }
+
+        if ctrl.removed.load(Ordering::SeqCst) || ctrl.cancel_requested.load(Ordering::SeqCst) {
+            drop(file);
+            let _ = fs::remove_file(&part_path);
+            if !ctrl.removed.load(Ordering::SeqCst) {
+                rec.status = "cancelled".to_string();
+                rec.downloaded_bytes = 0;
+                rec.updated_at = Utc::now().timestamp_millis();
+                self.db.upsert_download_record(&rec)?;
+            }
+            return Ok(());
         }
 
         file.flush()?;
@@ -729,7 +980,7 @@ fn open_file_in_os(file_path: &Path) -> Result<()> {
     }
 }
 
-fn reveal_in_file_manager(
+pub fn reveal_in_file_manager(
     dest_file: &Path,
     temp_part_file: Option<&Path>,
     fallback_downloads_dir: &Path,

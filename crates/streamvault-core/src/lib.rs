@@ -29,6 +29,32 @@ pub struct ActiveMediaHighlight {
     pub title: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReleaseUpdateCheckResult {
+    pub current_version: String,
+    pub latest_version: Option<String>,
+    pub update_available: bool,
+    pub release_url: Option<String>,
+    pub release_name: Option<String>,
+    pub published_at: Option<String>,
+    pub notes_excerpt: Option<String>,
+    pub configured_repo: String,
+    pub portable_upgrade_note: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubLatestReleaseDto {
+    tag_name: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    html_url: Option<String>,
+    #[serde(default)]
+    published_at: Option<String>,
+    #[serde(default)]
+    body: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct StreamVaultCore {
     pub paths: PortablePaths,
@@ -136,8 +162,121 @@ impl StreamVaultCore {
             .map(|s| s.clear_temp_cache_on_exit)
             .unwrap_or(true);
         let _ = self.stream_cache.shutdown_cleanup(clear_on_exit);
+        self.downloader.shutdown_active_transfers();
         self.db.checkpoint_on_exit();
         self.logger
             .info("core", "StreamVault graceful portable shutdown completed");
+    }
+
+    /// Checks GitHub Releases API (`https://api.github.com/repos/{owner}/{repo}/releases/latest`)
+    /// without auto-overwriting any files, ensuring 100% safety for `StreamVault\data\` portable data.
+    pub async fn check_github_release_update(
+        &self,
+        repo_slug_override: Option<String>,
+    ) -> Result<ReleaseUpdateCheckResult> {
+        let current_version = env!("CARGO_PKG_VERSION").to_string();
+        let configured_repo = match repo_slug_override {
+            Some(s) if !s.trim().is_empty() => s.trim().trim_matches('/').to_string(),
+            _ => self
+                .db
+                .get_settings()
+                .map(|s| s.github_repo_slug.trim().trim_matches('/').to_string())
+                .unwrap_or_default(),
+        };
+
+        let portable_upgrade_note = "Portable-Safe Upgrade: Download the new portable .zip and replace StreamVault.exe (and runtime\\ if updated) while keeping your existing data\\ folder intact — bookmarks, history, settings, downloads, and data\\backups\\streamvault.backup.db stay untouched.".to_string();
+
+        if configured_repo.is_empty() || !configured_repo.contains('/') {
+            anyhow::bail!(
+                "Configure a GitHub repository slug (e.g. owner/StreamVault) in Settings → About first."
+            );
+        }
+
+        let parts: Vec<&str> = configured_repo.split('/').collect();
+        if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
+            anyhow::bail!("Invalid GitHub repository slug '{configured_repo}' (expected owner/repo)");
+        }
+
+        let api_url = format!(
+            "https://api.github.com/repos/{}/{}/releases/latest",
+            parts[0], parts[1]
+        );
+        let resp = self
+            .http_client
+            .get(&api_url)
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .await?;
+
+        if resp.status().as_u16() == 404 {
+            return Ok(ReleaseUpdateCheckResult {
+                current_version,
+                latest_version: None,
+                update_available: false,
+                release_url: Some(format!("https://github.com/{configured_repo}/releases")),
+                release_name: Some("No published GitHub release yet".to_string()),
+                published_at: None,
+                notes_excerpt: None,
+                configured_repo,
+                portable_upgrade_note,
+            });
+        }
+
+        if !resp.status().is_success() {
+            anyhow::bail!("GitHub API returned HTTP {}", resp.status());
+        }
+
+        let raw_body = resp.text().await?;
+        let dto: GithubLatestReleaseDto = serde_json::from_str(&raw_body)?;
+        let latest_clean = dto.tag_name.trim().trim_start_matches(['v', 'V']).to_string();
+        let update_available = is_newer_semver(&current_version, &latest_clean);
+        let notes_excerpt = dto.body.map(|b| {
+            let trimmed = b.trim();
+            if trimmed.chars().count() > 280 {
+                let mut s: String = trimmed.chars().take(280).collect();
+                s.push('…');
+                s
+            } else {
+                trimmed.to_string()
+            }
+        });
+
+        Ok(ReleaseUpdateCheckResult {
+            current_version,
+            latest_version: Some(latest_clean),
+            update_available,
+            release_url: dto
+                .html_url
+                .or_else(|| Some(format!("https://github.com/{configured_repo}/releases"))),
+            release_name: dto.name.or(Some(dto.tag_name)),
+            published_at: dto.published_at,
+            notes_excerpt,
+            configured_repo,
+            portable_upgrade_note,
+        })
+    }
+}
+
+pub fn is_newer_semver(current: &str, candidate: &str) -> bool {
+    fn parse_parts(v: &str) -> (u64, u64, u64, bool) {
+        let clean = v.trim().trim_start_matches(['v', 'V']);
+        let (core, pre) = match clean.split_once('-') {
+            Some((c, p)) => (c, !p.is_empty()),
+            None => (clean, false),
+        };
+        let mut nums = core.split('.').map(|s| s.parse::<u64>().unwrap_or(0));
+        (
+            nums.next().unwrap_or(0),
+            nums.next().unwrap_or(0),
+            nums.next().unwrap_or(0),
+            pre,
+        )
+    }
+    let (cmaj, cmin, cpat, cpre) = parse_parts(current);
+    let (nmaj, nmin, npat, npre) = parse_parts(candidate);
+    match (nmaj, nmin, npat).cmp(&(cmaj, cmin, cpat)) {
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Less => false,
+        std::cmp::Ordering::Equal => cpre && !npre,
     }
 }
