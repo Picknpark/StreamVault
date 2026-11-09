@@ -3736,7 +3736,7 @@ checksum = "ff7589a1859b09232522bb9edf076ca7fcf14ded96685d3fa629db73023ffbb7"
 
 [[package]]
 name = "streamvault"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "parking_lot",
@@ -3756,7 +3756,7 @@ dependencies = [
 
 [[package]]
 name = "streamvault-core"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3777,6 +3777,7 @@ dependencies = [
  "tokio",
  "url",
  "uuid",
+ "windows",
  "windows-sys 0.61.2",
  "winreg",
 ]

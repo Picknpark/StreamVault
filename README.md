@@ -21,7 +21,8 @@
 ## Key Features
 
 ### 1. Multi-Tab Portable WebView2 Browser
-- Chromium-powered multi-tab browsing across public HTTPS sites and private HTTP/LAN/BDIX media index servers.
+- Chromium-powered multi-tab browsing across public HTTPS sites and private HTTP/LAN/BDIX media index servers, with **Middle-Click / `Ctrl+Click` Background Tabs** and **`Ctrl+F` Find-in-Page** highlighting.
+- Built-in **Batch Media Grabber (`⬇ Grab`)** to filter and queue whole seasons of episodes + subtitles into a single folder (with configurable concurrency cap & speed limit) or launch them as a playlist.
 - Address bar omnibox with Bookmark & History autocomplete, Bookmark Bar, hierarchical Bookmark Folder Manager, and Browsing History with time-range clearing.
 - **Strict Portable Profile Isolation**: Shell UI (`data/webview2/shell`) and remote browser tabs (`data/webview2/tabs`) are completely isolated inside the portable folder—zero `%LOCALAPPDATA%` footprint.
 
@@ -32,7 +33,7 @@
 
 ### 3. Built-In Hardware-Accelerated `libmpv` Player (`D3D11`)
 - Dynamically loads `runtime/media-engine/libmpv-2.dll` onto a dedicated Win32 child surface (`gpu-context=d3d11`, `hwdec=auto-safe`) supporting MKV, HEVC/H.265, AV1 (`dav1d`), H.264, VP9, styled ASS/SSA/SRT/VTT subtitles, FLAC, DTS, AAC, and Opus.
-- Timeline buffered-range visualization, native Win32 hover time tooltip rendered above the video surface, audio/subtitle track switching, external subtitle file loading, playback speed (`0.25x`–`3.0x`), aspect ratio overrides, flicker-free fullscreen with auto-hiding HUD, and topmost floating **Picture-in-Picture (`PiP`)** window.
+- Timeline buffered-range visualization, **MKV Chapter Markers** with chapter titles inside the native Win32 hover time tooltip, **Episode Playlist Queue & Auto-Play Next**, **Auto-Matched Server & Local Subtitles**, **Subtitle/Audio Sync (`Z`/`X`) & Subtitle Scale**, **Night / Dialogue Boost (`dynaudnorm`)**, **One-Key Frame Screenshots (`S`)**, **Local File Open & Drag-and-Drop (`Ctrl+O`)**, **Windows Hardware Media Keys & SMTC Flyout**, flicker-free fullscreen with auto-hiding HUD, and topmost floating **Picture-in-Picture (`PiP`)** window.
 - Automatic per-media **Playback Position Memory** with Resume / Start-from-00:00 prompt and Grid/List **Recent Media** library.
 
 ### 4. Instant Progressive HTTP `Range` Disk Streaming Cache
@@ -75,8 +76,15 @@
 | `Up` / `Down` Arrow / Mouse Wheel | Volume up / down (`0%`–`150%`) |
 | `M` | Mute / Unmute |
 | `F` / Double-Click Video | Toggle Fullscreen |
-| `Esc` | Exit Fullscreen / Close PiP |
+| `Esc` | Exit Fullscreen / Close Find Bar |
 | `[` / `]` | Decrease / Increase Playback Speed |
+| `Z` / `X` | Subtitle Sync Delay `-100 ms` / `+100 ms` |
+| `S` | Capture Video Frame Screenshot (`.png`) |
+| `N` / `P` | Next / Previous Episode in Playlist Queue |
+| `PageDown` / `PageUp` | Next / Previous MKV Chapter |
+| `Ctrl+O` | Open Local Video / Audio / Subtitle Files |
+| `Ctrl+F` | Find in Webpage |
+| Hardware Media Keys | `Play/Pause`, `Next`, `Previous`, `Stop` (Windows SMTC) |
 
 ---
 
