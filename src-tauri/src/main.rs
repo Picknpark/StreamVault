@@ -50,6 +50,7 @@ fn main() {
     };
 
     let tab_manager = BrowserTabManager::new(core.clone());
+    let tabs_for_setup = tab_manager.clone();
     let core_for_setup = core.clone();
     let core_for_exit = core.clone();
     let shutdown_ran = Arc::new(AtomicBool::new(false));
@@ -73,6 +74,7 @@ fn main() {
                     if parent_hwnd != 0 {
                         let cb_app = app_handle.clone();
                         let cb_core = core_for_setup.clone();
+                        let cb_tabs = tabs_for_setup.clone();
                         let _ = core_for_setup.player.attach_to_parent_window(
                             parent_hwnd,
                             Arc::new(move |ev: SurfaceInputEvent| match ev {
@@ -81,6 +83,7 @@ fn main() {
                                         if snap.paused {
                                             persist_snapshot_position(&cb_core, &snap);
                                         }
+                                        cb_tabs.broadcast_active_media_highlight(&cb_app);
                                         let _ = cb_app.emit("sv://player-state", snap);
                                     }
                                 }
@@ -94,6 +97,10 @@ fn main() {
                                 SurfaceInputEvent::WheelDelta { notches } => {
                                     let curr = cb_core.player.snapshot().volume;
                                     if let Ok(snap) = cb_core.player.set_volume(curr + (notches as i64 * 5)) {
+                                        let _ = cb_core.db.update_single_setting(
+                                            "default_volume",
+                                            serde_json::json!(snap.volume),
+                                        );
                                         let _ = cb_app.emit("sv://player-state", snap);
                                     }
                                 }
@@ -102,6 +109,65 @@ fn main() {
                                 }
                                 SurfaceInputEvent::KeyPress { vk_code } => {
                                     let _ = cb_app.emit("sv://player-surface-key", vk_code);
+                                }
+                                SurfaceInputEvent::MediaCommand { action } => {
+                                    match action.as_str() {
+                                        "play_pause" => {
+                                            if cb_core.player.snapshot().active {
+                                                if let Ok(snap) = cb_core.player.toggle_pause() {
+                                                    if snap.paused {
+                                                        persist_snapshot_position(&cb_core, &snap);
+                                                    }
+                                                    cb_tabs.broadcast_active_media_highlight(&cb_app);
+                                                    let _ = cb_app.emit("sv://player-state", snap);
+                                                }
+                                            }
+                                        }
+                                        "play" => {
+                                            if cb_core.player.snapshot().active {
+                                                if let Ok(snap) = cb_core.player.set_pause(false) {
+                                                    cb_tabs.broadcast_active_media_highlight(&cb_app);
+                                                    let _ = cb_app.emit("sv://player-state", snap);
+                                                }
+                                            }
+                                        }
+                                        "pause" => {
+                                            if cb_core.player.snapshot().active {
+                                                if let Ok(snap) = cb_core.player.set_pause(true) {
+                                                    persist_snapshot_position(&cb_core, &snap);
+                                                    cb_tabs.broadcast_active_media_highlight(&cb_app);
+                                                    let _ = cb_app.emit("sv://player-state", snap);
+                                                }
+                                            }
+                                        }
+                                        "fast_forward" => {
+                                            if cb_core.player.snapshot().active {
+                                                if let Ok(snap) =
+                                                    cb_core.player.seek_relative_seconds(10.0)
+                                                {
+                                                    let _ = cb_app.emit("sv://player-state", snap);
+                                                }
+                                            }
+                                        }
+                                        "rewind" => {
+                                            if cb_core.player.snapshot().active {
+                                                if let Ok(snap) =
+                                                    cb_core.player.seek_relative_seconds(-10.0)
+                                                {
+                                                    let _ = cb_app.emit("sv://player-state", snap);
+                                                }
+                                            }
+                                        }
+                                        "exit_pip" => {
+                                            if let Ok(snap) = cb_core.player.set_pip_mode(false) {
+                                                let _ = cb_app.emit("sv://player-state", snap);
+                                            }
+                                            let _ = cb_app.emit("sv://media-key-command", action);
+                                        }
+                                        _ => {
+                                            let _ = cb_app.emit("sv://media-key-command", action);
+                                        }
+                                    }
                                 }
                                 SurfaceInputEvent::StateChanged => {
                                     let snap = cb_core.player.snapshot();
@@ -113,6 +179,7 @@ fn main() {
                                 } => {
                                     let snap = cb_core.player.snapshot();
                                     persist_snapshot_position(&cb_core, &snap);
+                                    cb_tabs.broadcast_active_media_highlight(&cb_app);
                                     let _ = cb_app.emit(
                                         "sv://player-ended",
                                         serde_json::json!({
@@ -123,6 +190,9 @@ fn main() {
                                 }
                             }),
                         );
+                        if let Ok(init_settings) = core_for_setup.db.get_settings() {
+                            let _ = core_for_setup.player.set_volume(init_settings.default_volume);
+                        }
                     }
                 }
             }
@@ -130,6 +200,7 @@ fn main() {
             // Periodic background telemetry & playback-position persistence (every ~800ms UI / ~5s SQLite)
             let tick_app = app_handle.clone();
             let tick_core = core_for_setup.clone();
+            let tick_tabs = tabs_for_setup.clone();
             tauri::async_runtime::spawn(async move {
                 let mut ticks: u64 = 0;
                 let mut net_sampler = streamvault_core::sys_utils::NetSpeedSampler::new();
@@ -145,6 +216,7 @@ fn main() {
 
                     if player_snap.active && !player_snap.paused && ticks % 6 == 0 {
                         persist_snapshot_position(&tick_core, &player_snap);
+                        tick_tabs.broadcast_active_media_highlight(&tick_app);
                     }
 
                     if player_snap.active || cache_status.is_some() {
@@ -172,6 +244,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::app_bootstrap_state,
+            commands::app_check_github_update,
             commands::get_dependency_status,
             commands::get_recent_logs,
             commands::clipboard_write_text,
@@ -185,6 +258,10 @@ fn main() {
             commands::tab_go_forward,
             commands::tab_reload,
             commands::tab_go_home,
+            commands::tab_get_page_media,
+            commands::tab_request_page_media,
+            commands::tab_find_in_page,
+            commands::tab_scroll_to_active_media,
             commands::browser_set_viewport,
             commands::suggest_address_bar,
             commands::tab_context_bridge,
@@ -209,9 +286,22 @@ fn main() {
             commands::player_set_pip,
             commands::player_set_viewport,
             commands::player_set_time_tooltip,
+            commands::player_open_local_file,
+            commands::player_browse_and_open_local_media,
+            commands::player_load_external_subtitle_path,
+            commands::player_load_external_subtitle_url,
+            commands::player_set_sub_delay,
+            commands::player_set_audio_delay,
+            commands::player_set_sub_scale,
+            commands::player_set_dialogue_boost,
+            commands::player_take_screenshot,
+            commands::player_reveal_path,
+            commands::player_sync_smtc,
             commands::stream_cache_status,
             commands::stream_cache_summary,
             commands::stream_cache_clear,
+            commands::download_pick_batch_folder,
+            commands::download_start_batch,
             commands::download_prepare_save_as,
             commands::download_prompt_save_as_and_start,
             commands::download_start_default_dir,
@@ -257,7 +347,7 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while building StreamVault Tauri application");
 
-    app.run(move |_app_handle, event| match event {
+    app.run(move |app_handle, event| match event {
         RunEvent::WindowEvent {
             label,
             event: WindowEvent::CloseRequested { .. },
@@ -267,6 +357,47 @@ fn main() {
                 core_for_exit.graceful_shutdown();
             }
         }
+        RunEvent::WindowEvent {
+            event: WindowEvent::DragDrop(dnd_event),
+            ..
+        } => match dnd_event {
+            tauri::DragDropEvent::Enter { paths, .. } => {
+                let has_valid = paths.iter().any(|p| {
+                    streamvault_core::media_detect::is_local_media_path(p)
+                        || streamvault_core::media_detect::is_local_subtitle_path(p)
+                });
+                if has_valid {
+                    let _ = app_handle.emit("sv://file-drop-hover", true);
+                }
+            }
+            tauri::DragDropEvent::Leave => {
+                let _ = app_handle.emit("sv://file-drop-hover", false);
+            }
+            tauri::DragDropEvent::Drop { paths, .. } => {
+                let _ = app_handle.emit("sv://file-drop-hover", false);
+                let mut media_paths = Vec::new();
+                let mut subtitle_paths = Vec::new();
+                for p in paths {
+                    if streamvault_core::media_detect::is_local_media_path(&p) {
+                        media_paths.push(p.to_string_lossy().to_string());
+                    } else if streamvault_core::media_detect::is_local_subtitle_path(&p) {
+                        subtitle_paths.push(p.to_string_lossy().to_string());
+                    }
+                }
+                media_paths.sort();
+                subtitle_paths.sort();
+                if !media_paths.is_empty() || !subtitle_paths.is_empty() {
+                    let _ = app_handle.emit(
+                        "sv://files-dropped",
+                        serde_json::json!({
+                            "media_paths": media_paths,
+                            "subtitle_paths": subtitle_paths
+                        }),
+                    );
+                }
+            }
+            _ => {}
+        },
         RunEvent::Exit => {
             if !shutdown_ran.swap(true, Ordering::SeqCst) {
                 core_for_exit.graceful_shutdown();

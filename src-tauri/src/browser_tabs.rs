@@ -56,6 +56,45 @@ pub struct MediaDetectedPayload {
     pub preferred_method: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageMediaItem {
+    pub url: String,
+    pub filename: String,
+    pub title: String,
+    pub kind: String, // "video" | "audio" | "subtitle"
+    pub ext: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PageMediaCatalog {
+    #[serde(default)]
+    pub tab_id: String,
+    #[serde(default)]
+    pub page_url: String,
+    #[serde(default)]
+    pub page_title: String,
+    #[serde(default)]
+    pub items: Vec<PageMediaItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryLinkStatus {
+    pub key: String,
+    pub state: String, // "completed" | "progress" | "played"
+    pub label: String,
+    pub tooltip: String,
+    pub pct: u8,
+    pub is_last: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TabHighlightState {
+    pub active_key: Option<String>,
+    pub active_mode: Option<String>, // "in_app" | "paused" | "external"
+    pub active_title: Option<String>,
+    pub history: Vec<HistoryLinkStatus>,
+}
+
 #[derive(Clone)]
 pub struct BrowserTabManager {
     core: StreamVaultCore,
@@ -67,6 +106,7 @@ pub struct BrowserTabManager {
     active_tab_id: Arc<RwLock<Option<String>>>,
     viewport: Arc<RwLock<ViewportBounds>>,
     allow_media_in_tab: Arc<RwLock<HashMap<String, String>>>,
+    page_catalogs: Arc<RwLock<HashMap<String, PageMediaCatalog>>>,
 }
 
 impl BrowserTabManager {
@@ -82,6 +122,7 @@ impl BrowserTabManager {
             active_tab_id: Arc::new(RwLock::new(None)),
             viewport: Arc::new(RwLock::new(ViewportBounds::default())),
             allow_media_in_tab: Arc::new(RwLock::new(HashMap::new())),
+            page_catalogs: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -291,9 +332,20 @@ impl BrowserTabManager {
             .get_window("main")
             .context("Main StreamVault window not found")?;
 
+        let hl_state = self.build_tab_highlight_state();
+        let init_hl_key =
+            serde_json::to_string(&hl_state.active_key).unwrap_or_else(|_| "null".to_string());
+        let init_hl_mode =
+            serde_json::to_string(&hl_state.active_mode).unwrap_or_else(|_| "null".to_string());
+        let init_hl_history =
+            serde_json::to_string(&hl_state.history).unwrap_or_else(|_| "[]".to_string());
+
         let injected_script = TAB_SCRIPT_TEMPLATE
             .replace("__SV_SECRET_TOKEN__", &self.secret_nonce)
-            .replace("__SV_TAB_ID__", &tab_id);
+            .replace("__SV_TAB_ID__", &tab_id)
+            .replace("__SV_INIT_HIGHLIGHT_KEY__", &init_hl_key)
+            .replace("__SV_INIT_HIGHLIGHT_MODE__", &init_hl_mode)
+            .replace("__SV_INIT_HIGHLIGHT_HISTORY__", &init_hl_history);
 
         let mgr_nav = self.clone();
         let app_nav = app.clone();
@@ -468,6 +520,7 @@ impl BrowserTabManager {
             let _ = wv.close();
         }
         self.allow_media_in_tab.write().remove(tab_id);
+        self.page_catalogs.write().remove(tab_id);
         self.tabs.write().remove(tab_id);
         {
             let mut order = self.tab_order.write();
@@ -552,16 +605,24 @@ impl BrowserTabManager {
 
         let is_blank = target_url == "about:blank";
         let parsed = Url::parse(&target_url)?;
+        let provisional_title = parsed
+            .host_str()
+            .map(|h| h.to_string())
+            .unwrap_or_else(|| target_url.clone());
         if let Some(wv) = app.get_webview(&resolved_id) {
             wv.navigate(parsed)?;
         }
         {
             if let Some(t) = self.tabs.write().get_mut(&resolved_id) {
+                let url_changed = t.url != target_url;
                 t.url = target_url;
                 if is_blank {
                     t.title = "New Tab".to_string();
                     t.is_loading = false;
                 } else {
+                    if url_changed {
+                        t.title = provisional_title;
+                    }
                     t.is_loading = true;
                 }
             }
@@ -689,28 +750,157 @@ impl BrowserTabManager {
         }
     }
 
-    /// Broadcasts the currently playing media URL & playback mode (`in_app` | `external`)
+    pub fn build_tab_highlight_state(&self) -> TabHighlightState {
+        use streamvault_core::db::recent_media::{format_duration_ms, MIN_RESUME_POSITION_MS};
+
+        let hl = self.core.active_highlight.read().clone();
+        let snap = self.core.player.snapshot();
+
+        let active_mode = match hl.mode.as_deref() {
+            Some("external") => Some("external".to_string()),
+            Some("in_app") => {
+                if snap.active && snap.paused {
+                    Some("paused".to_string())
+                } else {
+                    Some("in_app".to_string())
+                }
+            }
+            other => other.map(|s| s.to_string()),
+        };
+
+        let recent = self.core.db.list_recent_media(200).unwrap_or_default();
+        let mut history = Vec::with_capacity(recent.len());
+
+        for (idx, item) in recent.into_iter().enumerate() {
+            if item.media_key.starts_with("local://") {
+                continue;
+            }
+            let is_last = idx == 0;
+            if item.completed {
+                let dur_note = if item.duration_ms > 0 {
+                    format!(" ({})", format_duration_ms(item.duration_ms))
+                } else {
+                    String::new()
+                };
+                history.push(HistoryLinkStatus {
+                    key: item.media_key,
+                    state: "completed".to_string(),
+                    label: "✓ Watched".to_string(),
+                    tooltip: format!("Completed{dur_note} • Watched in StreamVault"),
+                    pct: 100,
+                    is_last,
+                });
+            } else if item.last_position_ms >= MIN_RESUME_POSITION_MS {
+                let pos_str = format_duration_ms(item.last_position_ms);
+                let pct = if item.duration_ms > 0 {
+                    ((item.last_position_ms as f64 / item.duration_ms as f64) * 100.0)
+                        .round()
+                        .clamp(1.0, 99.0) as u8
+                } else {
+                    0
+                };
+                let label = if pct > 0 {
+                    format!("◐ {pos_str} ({pct}%)")
+                } else {
+                    format!("◐ {pos_str}")
+                };
+                let tooltip = if item.duration_ms > 0 {
+                    format!(
+                        "In Progress: {} / {} ({pct}%)",
+                        pos_str,
+                        format_duration_ms(item.duration_ms)
+                    )
+                } else {
+                    format!("In Progress: {pos_str}")
+                };
+                history.push(HistoryLinkStatus {
+                    key: item.media_key,
+                    state: "progress".to_string(),
+                    label,
+                    tooltip,
+                    pct,
+                    is_last,
+                });
+            } else if item.play_count > 0 {
+                let is_ext = item.playback_method == "external";
+                history.push(HistoryLinkStatus {
+                    key: item.media_key,
+                    state: "played".to_string(),
+                    label: if is_ext {
+                        "↗ Played".to_string()
+                    } else {
+                        "✓ Played".to_string()
+                    },
+                    tooltip: if is_ext {
+                        "Previously opened in External Player".to_string()
+                    } else {
+                        "Previously opened in StreamVault".to_string()
+                    },
+                    pct: 0,
+                    is_last,
+                });
+            }
+        }
+
+        TabHighlightState {
+            active_key: hl.normalized_key,
+            active_mode,
+            active_title: hl.title,
+            history,
+        }
+    }
+
+    /// Broadcasts the currently playing/paused/external media URL + watched/in-progress link history
     /// to ALL open browser tabs so matching links are highlighted live on webpages!
     pub fn broadcast_active_media_highlight(&self, app: &AppHandle) {
+        let state_payload = self.build_tab_highlight_state();
+        let state_json =
+            serde_json::to_string(&state_payload).unwrap_or_else(|_| "null".to_string());
         let ids = self.tab_order.read().clone();
         for id in ids {
-            self.push_active_media_to_tab(app, &id);
+            self.push_highlight_state_json_to_tab(app, &id, &state_json);
         }
-        let hl = self.core.active_highlight.read().clone();
+        let mut hl = self.core.active_highlight.read().clone();
+        if let Some(ref eff_mode) = state_payload.active_mode {
+            hl.mode = Some(eff_mode.clone());
+        }
         let _ = app.emit("sv://active-media-changed", hl);
     }
 
     fn push_active_media_to_tab(&self, app: &AppHandle, tab_id: &str) {
+        let state_payload = self.build_tab_highlight_state();
+        let state_json =
+            serde_json::to_string(&state_payload).unwrap_or_else(|_| "null".to_string());
+        self.push_highlight_state_json_to_tab(app, tab_id, &state_json);
+    }
+
+    fn push_highlight_state_json_to_tab(&self, app: &AppHandle, tab_id: &str, state_json: &str) {
         let Some(wv) = app.get_webview(tab_id) else {
             return;
         };
-        let hl = self.core.active_highlight.read().clone();
-        let norm_json = serde_json::to_string(&hl.normalized_key).unwrap_or_else(|_| "null".to_string());
-        let mode_json = serde_json::to_string(&hl.mode).unwrap_or_else(|_| "null".to_string());
         let js = format!(
-            "if (typeof window.__SV_SET_ACTIVE_MEDIA__ === 'function') {{ window.__SV_SET_ACTIVE_MEDIA__({norm_json}, {mode_json}); }}"
+            "if (typeof window.__SV_SET_HIGHLIGHT_STATE__ === 'function') {{ window.__SV_SET_HIGHLIGHT_STATE__({state_json}, false); }}"
         );
         let _ = wv.eval(&js);
+    }
+
+    pub async fn scroll_to_active_media(&self, app: &AppHandle, tab_id: Option<&str>) -> bool {
+        let Some(target_id) = self.resolve_target_tab_id(tab_id) else {
+            return false;
+        };
+        let state_payload = self.build_tab_highlight_state();
+        let state_json =
+            serde_json::to_string(&state_payload).unwrap_or_else(|_| "null".to_string());
+        let js = format!(
+            "(function(){{ if (typeof window.__SV_SET_HIGHLIGHT_STATE__ === 'function') {{ return window.__SV_SET_HIGHLIGHT_STATE__({state_json}, true); }} if (typeof window.__SV_SCROLL_TO_ACTIVE_MEDIA__ === 'function') {{ return window.__SV_SCROLL_TO_ACTIVE_MEDIA__(); }} return false; }})()"
+        );
+        if let Some(val) = self.eval_script_json(app, &target_id, js.clone()).await {
+            return val.as_bool().unwrap_or(false);
+        }
+        if let Some(wv) = app.get_webview(&target_id) {
+            let _ = wv.eval(&js);
+        }
+        false
     }
 
     fn resolve_target_tab_id(&self, tab_id: Option<&str>) -> Option<String> {
@@ -937,6 +1127,222 @@ impl BrowserTabManager {
             .collect();
         let _ = self.core.db.save_browser_session(&saved);
         let _ = app.emit("sv://tabs-updated", list);
+    }
+
+    pub fn store_page_media_catalog(
+        &self,
+        app: &AppHandle,
+        tab_id: &str,
+        mut catalog: PageMediaCatalog,
+    ) {
+        catalog.tab_id = tab_id.to_string();
+        self.page_catalogs
+            .write()
+            .insert(tab_id.to_string(), catalog.clone());
+        let _ = app.emit("sv://page-media-catalog", catalog);
+    }
+
+    pub fn get_page_media_catalog(&self, tab_id: Option<&str>) -> Option<PageMediaCatalog> {
+        let target_id = match tab_id {
+            Some(id) if !id.trim().is_empty() => id.to_string(),
+            _ => self.active_tab_id.read().clone()?,
+        };
+        self.page_catalogs.read().get(&target_id).cloned()
+    }
+
+    /// Non-blocking `ICoreWebView2::ExecuteScript` helper on Windows.
+    /// Dispatches script execution on the UI STA thread and awaits the COM completion
+    /// handler outside `with_webview` via a `tokio::sync::oneshot` channel.
+    pub async fn eval_script_json(
+        &self,
+        app: &AppHandle,
+        tab_id: &str,
+        js: String,
+    ) -> Option<serde_json::Value> {
+        #[cfg(windows)]
+        {
+            let wv = app.get_webview(tab_id)?;
+            let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+            let tx_cell = std::sync::Arc::new(std::sync::Mutex::new(Some(tx)));
+            let dispatched = wv.with_webview(move |platform_wv| unsafe {
+                if let Ok(core) = platform_wv.controller().CoreWebView2() {
+                    let wide = webview2_com::CoTaskMemPWSTR::from(js.as_str());
+                    let tx_cb = tx_cell.clone();
+                    let handler = webview2_com::ExecuteScriptCompletedHandler::create(Box::new(
+                        move |_err, result_json: String| {
+                            if let Ok(mut guard) = tx_cb.lock() {
+                                if let Some(sender) = guard.take() {
+                                    let _ = sender.send(result_json);
+                                }
+                            }
+                            Ok(())
+                        },
+                    ));
+                    if core
+                        .ExecuteScript(*wide.as_ref().as_pcwstr(), &handler)
+                        .is_err()
+                    {
+                        if let Ok(mut guard) = tx_cell.lock() {
+                            let _ = guard.take();
+                        }
+                    }
+                } else if let Ok(mut guard) = tx_cell.lock() {
+                    let _ = guard.take();
+                }
+            });
+            if dispatched.is_err() {
+                return None;
+            }
+            let raw = tokio::time::timeout(std::time::Duration::from_millis(1800), rx)
+                .await
+                .ok()?
+                .ok()?;
+            let val = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
+            match val {
+                serde_json::Value::String(inner) => {
+                    serde_json::from_str::<serde_json::Value>(&inner)
+                        .ok()
+                        .or(Some(serde_json::Value::String(inner)))
+                }
+                serde_json::Value::Null => None,
+                other => Some(other),
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            if let Some(wv) = app.get_webview(tab_id) {
+                let _ = wv.eval(&js);
+            }
+            None
+        }
+    }
+
+    pub async fn scan_page_media_live(
+        &self,
+        app: &AppHandle,
+        tab_id: Option<&str>,
+    ) -> Result<Option<PageMediaCatalog>> {
+        let target_id = match tab_id {
+            Some(id) if !id.trim().is_empty() => id.to_string(),
+            _ => match self.active_tab_id.read().clone() {
+                Some(id) => id,
+                None => return Ok(None),
+            },
+        };
+
+        let js = r#"(function(){
+            if (typeof window.__SV_COLLECT_PAGE_MEDIA__ === 'function') {
+                return window.__SV_COLLECT_PAGE_MEDIA__();
+            }
+            var V = {mkv:1,mp4:1,avi:1,mov:1,wmv:1,flv:1,webm:1,m4v:1,mpeg:1,mpg:1,ts:1,m2ts:1,mts:1,ogv:1,3gp:1,vob:1,divx:1,iso:1,m3u8:1,mpd:1};
+            var A = {mp3:1,flac:1,wav:1,aac:1,m4a:1,ogg:1,opus:1,wma:1,ac3:1,eac3:1,dts:1,alac:1,ape:1,mka:1};
+            var S = {srt:1,ass:1,ssa:1,vtt:1,sub:1};
+            var seen = {};
+            var items = [];
+            var links = document.querySelectorAll('a[href]');
+            for (var i = 0; i < links.length && items.length < 800; i++) {
+                var a = links[i];
+                if (!a.href) continue;
+                var txt = (a.textContent || '').trim();
+                if (txt === '../' || txt === '..' || /^parent directory$/i.test(txt)) continue;
+                try {
+                    var u = new URL(a.href, window.location.href);
+                    if (u.protocol !== 'http:' && u.protocol !== 'https:') continue;
+                    var segs = u.pathname.split('/').filter(Boolean);
+                    if (!segs.length) continue;
+                    var rawLast = segs[segs.length - 1];
+                    var last = rawLast;
+                    try { last = decodeURIComponent(rawLast); } catch(_) {}
+                    var dot = last.lastIndexOf('.');
+                    if (dot <= 0) continue;
+                    var ext = last.slice(dot + 1).toLowerCase();
+                    var kind = V[ext] ? 'video' : (A[ext] ? 'audio' : (S[ext] ? 'subtitle' : null));
+                    if (!kind) continue;
+                    u.hash = '';
+                    var key = u.href;
+                    if (seen[key]) continue;
+                    seen[key] = 1;
+                    items.push({ url: u.href, filename: last, title: txt.length >= 2 ? txt.slice(0, 220) : last, kind: kind, ext: ext });
+                } catch(_) {}
+            }
+            return { page_url: window.location.href || '', page_title: document.title || '', items: items };
+        })()"#.to_string();
+
+        if let Some(val) = self.eval_script_json(app, &target_id, js).await {
+            if let Ok(catalog) = serde_json::from_value::<PageMediaCatalog>(val) {
+                self.store_page_media_catalog(app, &target_id, catalog);
+                return Ok(self.get_page_media_catalog(Some(&target_id)));
+            }
+        }
+
+        if let Some(wv) = app.get_webview(&target_id) {
+            let _ = wv.eval(
+                "if (window.__SV_REQUEST_PAGE_MEDIA__) { window.__SV_REQUEST_PAGE_MEDIA__(); }",
+            );
+        }
+        Ok(self.get_page_media_catalog(Some(&target_id)))
+    }
+
+    #[allow(dead_code)]
+    pub fn request_page_media_scan(&self, app: &AppHandle, tab_id: Option<&str>) -> Result<()> {
+        let target_id = match tab_id {
+            Some(id) if !id.trim().is_empty() => id.to_string(),
+            _ => self
+                .active_tab_id
+                .read()
+                .clone()
+                .context("No active browser tab")?,
+        };
+        if let Some(wv) = app.get_webview(&target_id) {
+            let _ = wv.eval(
+                "if (window.__SV_REQUEST_PAGE_MEDIA__) { window.__SV_REQUEST_PAGE_MEDIA__(); }",
+            );
+        }
+        Ok(())
+    }
+
+    pub async fn find_in_page_live(
+        &self,
+        app: &AppHandle,
+        tab_id: Option<&str>,
+        query: &str,
+        forward: bool,
+        clear: bool,
+        stay_on_current: bool,
+    ) -> Result<serde_json::Value> {
+        let target_id = match tab_id {
+            Some(id) if !id.trim().is_empty() => id.to_string(),
+            _ => self
+                .active_tab_id
+                .read()
+                .clone()
+                .context("No active browser tab")?,
+        };
+        let q_json = serde_json::to_string(query).unwrap_or_else(|_| "\"\"".to_string());
+        let fwd_lit = if forward { "true" } else { "false" };
+        let clr_lit = if clear { "true" } else { "false" };
+        let stay_lit = if stay_on_current { "true" } else { "false" };
+        let js = format!(
+            "(function(){{ if (typeof window.__SV_FIND_IN_PAGE__ === 'function') {{ return window.__SV_FIND_IN_PAGE__({q_json}, {fwd_lit}, {clr_lit}, {stay_lit}); }} return {{ query: {q_json}, current: 0, total: 0 }}; }})()"
+        );
+
+        if let Some(mut val) = self.eval_script_json(app, &target_id, js.clone()).await {
+            if let Some(obj) = val.as_object_mut() {
+                obj.insert("tab_id".to_string(), serde_json::json!(target_id));
+            }
+            let _ = app.emit("sv://find-result", val.clone());
+            return Ok(val);
+        }
+
+        if let Some(wv) = app.get_webview(&target_id) {
+            let _ = wv.eval(&js);
+        }
+        Ok(serde_json::json!({
+            "tab_id": target_id,
+            "query": if clear { "" } else { query },
+            "current": 0,
+            "total": 0
+        }))
     }
 }
 

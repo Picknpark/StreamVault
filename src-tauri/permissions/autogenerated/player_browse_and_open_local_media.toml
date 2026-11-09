@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-player-browse-and-open-local-media"
+description = "Enables the player_browse_and_open_local_media command without any pre-configured scope."
+commands.allow = ["player_browse_and_open_local_media"]
+
+[[permission]]
+identifier = "deny-player-browse-and-open-local-media"
+description = "Denies the player_browse_and_open_local_media command without any pre-configured scope."
+commands.deny = ["player_browse_and_open_local_media"]

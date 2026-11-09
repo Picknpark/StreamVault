@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-tab-request-page-media"
+description = "Enables the tab_request_page_media command without any pre-configured scope."
+commands.allow = ["tab_request_page_media"]
+
+[[permission]]
+identifier = "deny-tab-request-page-media"
+description = "Denies the tab_request_page_media command without any pre-configured scope."
+commands.deny = ["tab_request_page_media"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-tab-find-in-page"
+description = "Enables the tab_find_in_page command without any pre-configured scope."
+commands.allow = ["tab_find_in_page"]
+
+[[permission]]
+identifier = "deny-tab-find-in-page"
+description = "Denies the tab_find_in_page command without any pre-configured scope."
+commands.deny = ["tab_find_in_page"]

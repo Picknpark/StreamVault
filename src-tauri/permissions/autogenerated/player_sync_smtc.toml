@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-player-sync-smtc"
+description = "Enables the player_sync_smtc command without any pre-configured scope."
+commands.allow = ["player_sync_smtc"]
+
+[[permission]]
+identifier = "deny-player-sync-smtc"
+description = "Denies the player_sync_smtc command without any pre-configured scope."
+commands.deny = ["player_sync_smtc"]

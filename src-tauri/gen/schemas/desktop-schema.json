@@ -183,6 +183,12 @@
           "markdownDescription": "Enables the app_bootstrap_state command without any pre-configured scope."
         },
         {
+          "description": "Enables the app_check_github_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-app-check-github-update",
+          "markdownDescription": "Enables the app_check_github_update command without any pre-configured scope."
+        },
+        {
           "description": "Enables the bookmark_folder_create command without any pre-configured scope.",
           "type": "string",
           "const": "allow-bookmark-folder-create",
@@ -291,6 +297,12 @@
           "markdownDescription": "Enables the download_pause command without any pre-configured scope."
         },
         {
+          "description": "Enables the download_pick_batch_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-download-pick-batch-folder",
+          "markdownDescription": "Enables the download_pick_batch_folder command without any pre-configured scope."
+        },
+        {
           "description": "Enables the download_prepare_save_as command without any pre-configured scope.",
           "type": "string",
           "const": "allow-download-prepare-save-as",
@@ -319,6 +331,12 @@
           "type": "string",
           "const": "allow-download-retry",
           "markdownDescription": "Enables the download_retry command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the download_start_batch command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-download-start-batch",
+          "markdownDescription": "Enables the download_start_batch command without any pre-configured scope."
         },
         {
           "description": "Enables the download_start_default_dir command without any pre-configured scope.",
@@ -417,10 +435,40 @@
           "markdownDescription": "Enables the player_browse_and_load_subtitle command without any pre-configured scope."
         },
         {
+          "description": "Enables the player_browse_and_open_local_media command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-player-browse-and-open-local-media",
+          "markdownDescription": "Enables the player_browse_and_open_local_media command without any pre-configured scope."
+        },
+        {
           "description": "Enables the player_get_state command without any pre-configured scope.",
           "type": "string",
           "const": "allow-player-get-state",
           "markdownDescription": "Enables the player_get_state command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the player_load_external_subtitle_path command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-player-load-external-subtitle-path",
+          "markdownDescription": "Enables the player_load_external_subtitle_path command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the player_load_external_subtitle_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-player-load-external-subtitle-url",
+          "markdownDescription": "Enables the player_load_external_subtitle_url command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the player_open_local_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-player-open-local-file",
+          "markdownDescription": "Enables the player_open_local_file command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the player_reveal_path command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-player-reveal-path",
+          "markdownDescription": "Enables the player_reveal_path command without any pre-configured scope."
         },
         {
           "description": "Enables the player_seek_absolute command without any pre-configured scope.",
@@ -441,10 +489,22 @@
           "markdownDescription": "Enables the player_set_aspect_ratio command without any pre-configured scope."
         },
         {
+          "description": "Enables the player_set_audio_delay command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-player-set-audio-delay",
+          "markdownDescription": "Enables the player_set_audio_delay command without any pre-configured scope."
+        },
+        {
           "description": "Enables the player_set_audio_track command without any pre-configured scope.",
           "type": "string",
           "const": "allow-player-set-audio-track",
           "markdownDescription": "Enables the player_set_audio_track command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the player_set_dialogue_boost command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-player-set-dialogue-boost",
+          "markdownDescription": "Enables the player_set_dialogue_boost command without any pre-configured scope."
         },
         {
           "description": "Enables the player_set_fullscreen command without any pre-configured scope.",
@@ -469,6 +529,18 @@
           "type": "string",
           "const": "allow-player-set-speed",
           "markdownDescription": "Enables the player_set_speed command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the player_set_sub_delay command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-player-set-sub-delay",
+          "markdownDescription": "Enables the player_set_sub_delay command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the player_set_sub_scale command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-player-set-sub-scale",
+          "markdownDescription": "Enables the player_set_sub_scale command without any pre-configured scope."
         },
         {
           "description": "Enables the player_set_subtitle_track command without any pre-configured scope.",
@@ -499,6 +571,18 @@
           "type": "string",
           "const": "allow-player-stop",
           "markdownDescription": "Enables the player_stop command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the player_sync_smtc command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-player-sync-smtc",
+          "markdownDescription": "Enables the player_sync_smtc command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the player_take_screenshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-player-take-screenshot",
+          "markdownDescription": "Enables the player_take_screenshot command without any pre-configured scope."
         },
         {
           "description": "Enables the player_toggle_mute command without any pre-configured scope.",
@@ -627,6 +711,18 @@
           "markdownDescription": "Enables the tab_ensure_initialized command without any pre-configured scope."
         },
         {
+          "description": "Enables the tab_find_in_page command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-tab-find-in-page",
+          "markdownDescription": "Enables the tab_find_in_page command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the tab_get_page_media command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-tab-get-page-media",
+          "markdownDescription": "Enables the tab_get_page_media command without any pre-configured scope."
+        },
+        {
           "description": "Enables the tab_go_back command without any pre-configured scope.",
           "type": "string",
           "const": "allow-tab-go-back",
@@ -663,6 +759,18 @@
           "markdownDescription": "Enables the tab_reload command without any pre-configured scope."
         },
         {
+          "description": "Enables the tab_request_page_media command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-tab-request-page-media",
+          "markdownDescription": "Enables the tab_request_page_media command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the tab_scroll_to_active_media command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-tab-scroll-to-active-media",
+          "markdownDescription": "Enables the tab_scroll_to_active_media command without any pre-configured scope."
+        },
+        {
           "description": "Enables the tab_switch command without any pre-configured scope.",
           "type": "string",
           "const": "allow-tab-switch",
@@ -673,6 +781,12 @@
           "type": "string",
           "const": "deny-app-bootstrap-state",
           "markdownDescription": "Denies the app_bootstrap_state command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the app_check_github_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-app-check-github-update",
+          "markdownDescription": "Denies the app_check_github_update command without any pre-configured scope."
         },
         {
           "description": "Denies the bookmark_folder_create command without any pre-configured scope.",
@@ -783,6 +897,12 @@
           "markdownDescription": "Denies the download_pause command without any pre-configured scope."
         },
         {
+          "description": "Denies the download_pick_batch_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-download-pick-batch-folder",
+          "markdownDescription": "Denies the download_pick_batch_folder command without any pre-configured scope."
+        },
+        {
           "description": "Denies the download_prepare_save_as command without any pre-configured scope.",
           "type": "string",
           "const": "deny-download-prepare-save-as",
@@ -811,6 +931,12 @@
           "type": "string",
           "const": "deny-download-retry",
           "markdownDescription": "Denies the download_retry command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the download_start_batch command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-download-start-batch",
+          "markdownDescription": "Denies the download_start_batch command without any pre-configured scope."
         },
         {
           "description": "Denies the download_start_default_dir command without any pre-configured scope.",
@@ -909,10 +1035,40 @@
           "markdownDescription": "Denies the player_browse_and_load_subtitle command without any pre-configured scope."
         },
         {
+          "description": "Denies the player_browse_and_open_local_media command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-player-browse-and-open-local-media",
+          "markdownDescription": "Denies the player_browse_and_open_local_media command without any pre-configured scope."
+        },
+        {
           "description": "Denies the player_get_state command without any pre-configured scope.",
           "type": "string",
           "const": "deny-player-get-state",
           "markdownDescription": "Denies the player_get_state command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the player_load_external_subtitle_path command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-player-load-external-subtitle-path",
+          "markdownDescription": "Denies the player_load_external_subtitle_path command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the player_load_external_subtitle_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-player-load-external-subtitle-url",
+          "markdownDescription": "Denies the player_load_external_subtitle_url command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the player_open_local_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-player-open-local-file",
+          "markdownDescription": "Denies the player_open_local_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the player_reveal_path command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-player-reveal-path",
+          "markdownDescription": "Denies the player_reveal_path command without any pre-configured scope."
         },
         {
           "description": "Denies the player_seek_absolute command without any pre-configured scope.",
@@ -933,10 +1089,22 @@
           "markdownDescription": "Denies the player_set_aspect_ratio command without any pre-configured scope."
         },
         {
+          "description": "Denies the player_set_audio_delay command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-player-set-audio-delay",
+          "markdownDescription": "Denies the player_set_audio_delay command without any pre-configured scope."
+        },
+        {
           "description": "Denies the player_set_audio_track command without any pre-configured scope.",
           "type": "string",
           "const": "deny-player-set-audio-track",
           "markdownDescription": "Denies the player_set_audio_track command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the player_set_dialogue_boost command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-player-set-dialogue-boost",
+          "markdownDescription": "Denies the player_set_dialogue_boost command without any pre-configured scope."
         },
         {
           "description": "Denies the player_set_fullscreen command without any pre-configured scope.",
@@ -961,6 +1129,18 @@
           "type": "string",
           "const": "deny-player-set-speed",
           "markdownDescription": "Denies the player_set_speed command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the player_set_sub_delay command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-player-set-sub-delay",
+          "markdownDescription": "Denies the player_set_sub_delay command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the player_set_sub_scale command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-player-set-sub-scale",
+          "markdownDescription": "Denies the player_set_sub_scale command without any pre-configured scope."
         },
         {
           "description": "Denies the player_set_subtitle_track command without any pre-configured scope.",
@@ -991,6 +1171,18 @@
           "type": "string",
           "const": "deny-player-stop",
           "markdownDescription": "Denies the player_stop command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the player_sync_smtc command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-player-sync-smtc",
+          "markdownDescription": "Denies the player_sync_smtc command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the player_take_screenshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-player-take-screenshot",
+          "markdownDescription": "Denies the player_take_screenshot command without any pre-configured scope."
         },
         {
           "description": "Denies the player_toggle_mute command without any pre-configured scope.",
@@ -1119,6 +1311,18 @@
           "markdownDescription": "Denies the tab_ensure_initialized command without any pre-configured scope."
         },
         {
+          "description": "Denies the tab_find_in_page command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-tab-find-in-page",
+          "markdownDescription": "Denies the tab_find_in_page command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the tab_get_page_media command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-tab-get-page-media",
+          "markdownDescription": "Denies the tab_get_page_media command without any pre-configured scope."
+        },
+        {
           "description": "Denies the tab_go_back command without any pre-configured scope.",
           "type": "string",
           "const": "deny-tab-go-back",
@@ -1153,6 +1357,18 @@
           "type": "string",
           "const": "deny-tab-reload",
           "markdownDescription": "Denies the tab_reload command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the tab_request_page_media command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-tab-request-page-media",
+          "markdownDescription": "Denies the tab_request_page_media command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the tab_scroll_to_active_media command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-tab-scroll-to-active-media",
+          "markdownDescription": "Denies the tab_scroll_to_active_media command without any pre-configured scope."
         },
         {
           "description": "Denies the tab_switch command without any pre-configured scope.",
