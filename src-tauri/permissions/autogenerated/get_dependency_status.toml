@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-dependency-status"
+description = "Enables the get_dependency_status command without any pre-configured scope."
+commands.allow = ["get_dependency_status"]
+
+[[permission]]
+identifier = "deny-get-dependency-status"
+description = "Denies the get_dependency_status command without any pre-configured scope."
+commands.deny = ["get_dependency_status"]

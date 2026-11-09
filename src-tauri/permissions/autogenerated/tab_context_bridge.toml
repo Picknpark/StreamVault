@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-tab-context-bridge"
+description = "Enables the tab_context_bridge command without any pre-configured scope."
+commands.allow = ["tab_context_bridge"]
+
+[[permission]]
+identifier = "deny-tab-context-bridge"
+description = "Denies the tab_context_bridge command without any pre-configured scope."
+commands.deny = ["tab_context_bridge"]

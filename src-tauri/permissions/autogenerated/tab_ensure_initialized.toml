@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-tab-ensure-initialized"
+description = "Enables the tab_ensure_initialized command without any pre-configured scope."
+commands.allow = ["tab_ensure_initialized"]
+
+[[permission]]
+identifier = "deny-tab-ensure-initialized"
+description = "Denies the tab_ensure_initialized command without any pre-configured scope."
+commands.deny = ["tab_ensure_initialized"]

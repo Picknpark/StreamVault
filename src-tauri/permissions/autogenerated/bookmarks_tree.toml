@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-bookmarks-tree"
+description = "Enables the bookmarks_tree command without any pre-configured scope."
+commands.allow = ["bookmarks_tree"]
+
+[[permission]]
+identifier = "deny-bookmarks-tree"
+description = "Denies the bookmarks_tree command without any pre-configured scope."
+commands.deny = ["bookmarks_tree"]

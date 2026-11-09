@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-player-set-time-tooltip"
+description = "Enables the player_set_time_tooltip command without any pre-configured scope."
+commands.allow = ["player_set_time_tooltip"]
+
+[[permission]]
+identifier = "deny-player-set-time-tooltip"
+description = "Denies the player_set_time_tooltip command without any pre-configured scope."
+commands.deny = ["player_set_time_tooltip"]

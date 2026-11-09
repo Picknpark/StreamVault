@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-download-prepare-save-as"
+description = "Enables the download_prepare_save_as command without any pre-configured scope."
+commands.allow = ["download_prepare_save_as"]
+
+[[permission]]
+identifier = "deny-download-prepare-save-as"
+description = "Denies the download_prepare_save_as command without any pre-configured scope."
+commands.deny = ["download_prepare_save_as"]

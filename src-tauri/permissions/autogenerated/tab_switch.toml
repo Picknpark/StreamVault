@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-tab-switch"
+description = "Enables the tab_switch command without any pre-configured scope."
+commands.allow = ["tab_switch"]
+
+[[permission]]
+identifier = "deny-tab-switch"
+description = "Denies the tab_switch command without any pre-configured scope."
+commands.deny = ["tab_switch"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-probe-media-link"
+description = "Enables the probe_media_link command without any pre-configured scope."
+commands.allow = ["probe_media_link"]
+
+[[permission]]
+identifier = "deny-probe-media-link"
+description = "Denies the probe_media_link command without any pre-configured scope."
+commands.deny = ["probe_media_link"]

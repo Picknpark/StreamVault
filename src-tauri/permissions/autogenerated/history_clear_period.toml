@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-history-clear-period"
+description = "Enables the history_clear_period command without any pre-configured scope."
+commands.allow = ["history_clear_period"]
+
+[[permission]]
+identifier = "deny-history-clear-period"
+description = "Denies the history_clear_period command without any pre-configured scope."
+commands.deny = ["history_clear_period"]

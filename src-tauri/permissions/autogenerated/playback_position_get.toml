@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-playback-position-get"
+description = "Enables the playback_position_get command without any pre-configured scope."
+commands.allow = ["playback_position_get"]
+
+[[permission]]
+identifier = "deny-playback-position-get"
+description = "Denies the playback_position_get command without any pre-configured scope."
+commands.deny = ["playback_position_get"]

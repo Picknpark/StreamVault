@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-player-seek-absolute"
+description = "Enables the player_seek_absolute command without any pre-configured scope."
+commands.allow = ["player_seek_absolute"]
+
+[[permission]]
+identifier = "deny-player-seek-absolute"
+description = "Denies the player_seek_absolute command without any pre-configured scope."
+commands.deny = ["player_seek_absolute"]

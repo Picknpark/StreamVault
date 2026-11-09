@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-external-players-detect"
+description = "Enables the external_players_detect command without any pre-configured scope."
+commands.allow = ["external_players_detect"]
+
+[[permission]]
+identifier = "deny-external-players-detect"
+description = "Denies the external_players_detect command without any pre-configured scope."
+commands.deny = ["external_players_detect"]

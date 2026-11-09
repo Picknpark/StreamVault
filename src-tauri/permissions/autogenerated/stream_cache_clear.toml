@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-stream-cache-clear"
+description = "Enables the stream_cache_clear command without any pre-configured scope."
+commands.allow = ["stream_cache_clear"]
+
+[[permission]]
+identifier = "deny-stream-cache-clear"
+description = "Denies the stream_cache_clear command without any pre-configured scope."
+commands.deny = ["stream_cache_clear"]

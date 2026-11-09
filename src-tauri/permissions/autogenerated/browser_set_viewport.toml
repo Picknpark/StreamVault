@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-browser-set-viewport"
+description = "Enables the browser_set_viewport command without any pre-configured scope."
+commands.allow = ["browser_set_viewport"]
+
+[[permission]]
+identifier = "deny-browser-set-viewport"
+description = "Denies the browser_set_viewport command without any pre-configured scope."
+commands.deny = ["browser_set_viewport"]

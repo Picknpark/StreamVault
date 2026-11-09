@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-privacy-clear-all-data"
+description = "Enables the privacy_clear_all_data command without any pre-configured scope."
+commands.allow = ["privacy_clear_all_data"]
+
+[[permission]]
+identifier = "deny-privacy-clear-all-data"
+description = "Denies the privacy_clear_all_data command without any pre-configured scope."
+commands.deny = ["privacy_clear_all_data"]

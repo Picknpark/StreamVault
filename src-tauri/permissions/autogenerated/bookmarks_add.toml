@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-bookmarks-add"
+description = "Enables the bookmarks_add command without any pre-configured scope."
+commands.allow = ["bookmarks_add"]
+
+[[permission]]
+identifier = "deny-bookmarks-add"
+description = "Denies the bookmarks_add command without any pre-configured scope."
+commands.deny = ["bookmarks_add"]

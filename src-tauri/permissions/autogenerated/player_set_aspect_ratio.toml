@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-player-set-aspect-ratio"
+description = "Enables the player_set_aspect_ratio command without any pre-configured scope."
+commands.allow = ["player_set_aspect_ratio"]
+
+[[permission]]
+identifier = "deny-player-set-aspect-ratio"
+description = "Denies the player_set_aspect_ratio command without any pre-configured scope."
+commands.deny = ["player_set_aspect_ratio"]

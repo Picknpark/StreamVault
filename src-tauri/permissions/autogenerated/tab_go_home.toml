@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-tab-go-home"
+description = "Enables the tab_go_home command without any pre-configured scope."
+commands.allow = ["tab_go_home"]
+
+[[permission]]
+identifier = "deny-tab-go-home"
+description = "Denies the tab_go_home command without any pre-configured scope."
+commands.deny = ["tab_go_home"]

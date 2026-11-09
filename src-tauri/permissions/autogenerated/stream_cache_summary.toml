@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-stream-cache-summary"
+description = "Enables the stream_cache_summary command without any pre-configured scope."
+commands.allow = ["stream_cache_summary"]
+
+[[permission]]
+identifier = "deny-stream-cache-summary"
+description = "Denies the stream_cache_summary command without any pre-configured scope."
+commands.deny = ["stream_cache_summary"]

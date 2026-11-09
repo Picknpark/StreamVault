@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-stream-cache-status"
+description = "Enables the stream_cache_status command without any pre-configured scope."
+commands.allow = ["stream_cache_status"]
+
+[[permission]]
+identifier = "deny-stream-cache-status"
+description = "Denies the stream_cache_status command without any pre-configured scope."
+commands.deny = ["stream_cache_status"]

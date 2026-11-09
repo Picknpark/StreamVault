@@ -1,0 +1,36 @@
+[package]
+name = "streamvault"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "StreamVault — Portable Windows Browser, Media Streaming & Advanced Media Player"
+default-run = "StreamVault"
+
+[[bin]]
+name = "StreamVault"
+path = "src/main.rs"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+streamvault-core = { path = "../crates/streamvault-core" }
+tauri = { version = "2", features = ["unstable"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+parking_lot = "0.12"
+tokio = { version = "1", features = ["time", "sync", "rt-multi-thread"] }
+url = "2.5"
+uuid = { version = "1", features = ["v4"] }
+raw-window-handle = "0.6"
+
+[target.'cfg(windows)'.dependencies]
+rfd = "0.15"
+webview2-com = "0.39"
+windows-sys = { version = "0.61", features = ["Win32_Foundation"] }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-download-prompt-save-as-and-start"
+description = "Enables the download_prompt_save_as_and_start command without any pre-configured scope."
+commands.allow = ["download_prompt_save_as_and_start"]
+
+[[permission]]
+identifier = "deny-download-prompt-save-as-and-start"
+description = "Denies the download_prompt_save_as_and_start command without any pre-configured scope."
+commands.deny = ["download_prompt_save_as_and_start"]

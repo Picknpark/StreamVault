@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-start-in-app-playback"
+description = "Enables the start_in_app_playback command without any pre-configured scope."
+commands.allow = ["start_in_app_playback"]
+
+[[permission]]
+identifier = "deny-start-in-app-playback"
+description = "Denies the start_in_app_playback command without any pre-configured scope."
+commands.deny = ["start_in_app_playback"]

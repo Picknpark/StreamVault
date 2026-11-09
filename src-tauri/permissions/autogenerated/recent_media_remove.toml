@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-recent-media-remove"
+description = "Enables the recent_media_remove command without any pre-configured scope."
+commands.allow = ["recent_media_remove"]
+
+[[permission]]
+identifier = "deny-recent-media-remove"
+description = "Denies the recent_media_remove command without any pre-configured scope."
+commands.deny = ["recent_media_remove"]

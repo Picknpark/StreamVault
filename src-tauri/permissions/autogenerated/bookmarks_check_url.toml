@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-bookmarks-check-url"
+description = "Enables the bookmarks_check_url command without any pre-configured scope."
+commands.allow = ["bookmarks_check_url"]
+
+[[permission]]
+identifier = "deny-bookmarks-check-url"
+description = "Denies the bookmarks_check_url command without any pre-configured scope."
+commands.deny = ["bookmarks_check_url"]
