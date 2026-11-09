@@ -1,0 +1,27 @@
+StreamVault Bundled Media Engine — libmpv-2.dll Licensing & Provenance
+======================================================================
+
+File: runtime/media-engine/libmpv-2.dll
+Architecture: Windows x86_64 (64-bit baseline PE32+ DLL)
+License: GNU Lesser General Public License v2.1 or later (LGPL v2.1+)
+Upstream Project: https://mpv.io/ (https://github.com/mpv-player/mpv)
+Windows LGPL Build Source: https://github.com/zhongfly/mpv-winbuild (mpv-dev-lgpl-x86_64)
+
+Summary of Dynamic Linking & User Freedom (LGPL v2.1+):
+- StreamVault dynamically loads `runtime/media-engine/libmpv-2.dll` at runtime
+  via its public C client API (`mpv/client.h`) using runtime symbol resolution.
+- Users are free to inspect, modify, upgrade, or replace `libmpv-2.dll` inside
+  `StreamVault/runtime/media-engine/libmpv-2.dll` with any compatible 64-bit
+  Windows `libmpv-2.dll` build at any time without recompiling `StreamVault.exe`.
+- Complete source code for mpv and its LGPL-configured FFmpeg/libass/dav1d/libplacebo
+  dependencies is available from https://github.com/mpv-player/mpv and
+  https://github.com/zhongfly/mpv-winbuild.
+
+Note on `runtime/media-engine/vulkan-1.dll`:
+- A minimal 2 KB zero-dependency fallback stub DLL created specifically for
+  StreamVault (MIT licensed, source in `streamvault-project/runtime-src/vulkan_fallback_stub.c`).
+- Because StreamVault registers `runtime\media-engine` via Win32 `SetDllDirectoryW`,
+  Windows ALWAYS searches `C:\Windows\System32\vulkan-1.dll` FIRST on machines with
+  hardware GPU drivers. Only GPU-less Windows VMs / Windows Sandbox instances that
+  lack `System32\vulkan-1.dll` fall back to this stub so `libmpv-2.dll` loads cleanly
+  and renders via Direct3D 11 (`gpu-context=d3d11`).
