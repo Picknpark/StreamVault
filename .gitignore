@@ -1,0 +1,63 @@
+# ==============================================================================
+# StreamVault — Git Ignore Rules
+# ==============================================================================
+
+# Rust / Cargo build outputs
+/target/
+**/target/
+**/*.rs.bk
+*.pdb
+*.ilk
+*.exp
+
+# Compiled binaries & large third-party runtime DLLs
+# (Publish portable binaries via GitHub Releases, NEVER inside Git history!)
+*.exe
+*.dll
+*.so
+*.dylib
+*.msi
+*.nsis
+
+# Release packaging staging output
+/dist/
+*.zip
+*.7z
+SHA256SUMS.txt
+
+# Portable user runtime data (NEVER commit personal browsing data, DBs, or caches!)
+/data/
+**/data/database/
+**/data/settings/
+**/data/cache/
+**/data/downloads/
+**/data/logs/
+**/data/backups/
+**/data/webview2/
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.svcache
+*.svpart
+*.log
+
+# Node / Optional tooling caches
+node_modules/
+npm-debug.log*
+
+# Environment & local secrets
+.env
+.env.*
+!.env.example
+
+# Editor & OS metadata
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini

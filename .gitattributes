@@ -1,0 +1,26 @@
+# Auto-normalize text files to LF in Git index while preserving Windows CRLF where required
+* text=auto eol=lf
+
+# Windows batch & PowerShell scripts require CRLF on Windows cmd.exe / PowerShell 5.1
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+packaging/README-PORTABLE.txt text eol=crlf
+
+# Source files
+*.rs   text eol=lf diff=rust
+*.toml text eol=lf
+*.json text eol=lf
+*.html text eol=lf
+*.css  text eol=lf
+*.js   text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.c    text eol=lf
+
+# Binary assets
+*.png binary
+*.ico binary
+*.jpg binary
+*.woff2 binary
